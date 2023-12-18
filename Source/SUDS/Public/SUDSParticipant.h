@@ -124,6 +124,12 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="SUDS")
 	int GetDialogueParticipantPriority() const;
 
+	/**
+	 * Optional speaker ID. If this is non-empty, participants can be distinguished by USUDSDialogue::GetSpeakerParticipant().
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category = "SUDS")
+	FString GetSpeakerID() const;
+
 };
 
 

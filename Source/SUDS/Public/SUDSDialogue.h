@@ -16,6 +16,9 @@ class USUDSScript;
 class UDialogueWave;
 class UDialogueVoice;
 class USoundBase;
+class ISUDSParticipant;
+class USUDSParticipant;
+
 
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDialogueSpeakerLine, class USUDSDialogue*, Dialogue);
@@ -258,6 +261,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="SUDS|Dialogue")
 	void AddParticipant(UObject* Participant);
 
+	UFUNCTION(BlueprintCallable, Category = "SUDS|Dialogue")
+	bool RemoveParticipant(UObject* Participant);
+
 	/// Retrieve participants from this dialogue
 	UFUNCTION(BlueprintCallable, Category="SUDS|Dialogue")
 	const TArray<UObject*>& GetParticipants() const { return Participants; }
@@ -288,13 +294,73 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category="SUDS|Dialogue")
 	bool IsCurrentLineVoiced() const;
 
+	/// Get the participant matching current SpeakerID. If none is found, this returns null.
+	UFUNCTION(BlueprintCallable, BlueprintPure, DisplayName="GetSpeakerParticipant", Category = "SUDS|Dialogue")
+	void K2_GetSpeakerParticipant(TScriptInterface<ISUDSParticipant>& participant);
+
+	ISUDSParticipant* GetSpeakerParticipant() const;
+
 	/// Get the ID of the current speaker
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category="SUDS|Dialogue")
 	const FString& GetSpeakerID() const;
 
 	/// Get the display name of the current speaker
+	/// To set the display name, use set-lines. Eg.: [set SpeakerName.<speakerId> "the display name"]
+	/// NOTE, all set-lines' texts are localized, so it's safe to do it there.
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category="SUDS|Dialogue")
 	FText GetSpeakerDisplayName() const;
+
+	/// Convenient method. Get the X-position of the specified speaker, it ranges from 0~1 (can be extrapolated).
+	/// By default, 0 means left, 1 means right. You can interpret this value however you like.
+	/// If the position is not set, it always returns 1.1 (meaning, further at right side)
+	/// To set the x-position, use set-lines. Eg.: [set <speakerid>.xpos 0.0]
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SUDS|Dialogue")
+	float GetSpeakerXPosition(const FString& speakerId) const;
+
+	/// Set the X-position of the specified speaker, it ranges from 0~1 (can be extrapolated).
+	/// By default, 0 means left, 1 means right. You can interpret this value however you like.
+	UFUNCTION(BlueprintCallable, Category = "SUDS|Dialogue")
+	void SetSpeakerXPosition(const FString& speakerId, float xpos);
+
+	// Convenient method. Get the mood of the specified character.
+	// If nothing is set, this returns "normal".
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SUDS|Dialogue")
+	FString GetSpeakerMood(const FString& speakerId) const;
+
+	// Convenient method. Set the mood of the specified character.
+	// To set the mood in the Dialogue script: [set <speakerID>.mood `mood`]
+	// NOTE, you need to use `(tilda) instead of "
+	UFUNCTION(BlueprintCallable, Category = "SUDS|Dialogue")
+	void SetSpeakerMood(const FString& speakerId, const FString& mood);
+
+	// Convenient method. Get the current left party.
+	// If nothing is set, this returns an empty array.
+	// To set the left party in script, use: [set party.left "speakerId0,speakerId1"]
+	// The speakerId is not case sensitive
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SUDS|Dialogue")
+	void GetSpeakerPartyLeft(TArray<FString>& outAry) const;
+
+	// Convenient method. Get the current right party.
+	// If nothing is set, this returns an empty array.
+	// To set the right party in script, use: [set party.right "speakerId0,speakerId1"]
+	// The speakerId is not case sensitive
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SUDS|Dialogue")
+	void GetSpeakerPartyRight(TArray<FString>& outAry) const;
+
+	// Convenient method. Set the current party.
+	// Param leftParty: if true, this sets the left party. If false, this sets the right party
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SUDS|Dialogue")
+	void SetSpeakerParty(bool leftParty, const TArray<FString>& partyList);
+
+	// Convenient method. Set the current left party.
+	// To set the left party in script, use: [set party.left "speakerId0,speakerId1"]
+	UFUNCTION(BlueprintCallable, Category = "SUDS|Dialogue")
+	void SetSpeakerPartyLeft( const FString& partyList );
+
+	// Convenient method. Set the current right party.
+	// To set the right party in script, use: [set party.right "speakerId0,speakerId1"]
+	UFUNCTION(BlueprintCallable, Category = "SUDS|Dialogue")
+	void SetSpeakerPartyRight(const FString& partyList);
 
 	/// Get the Dialogue Voice belonging to the current speaker, if voiced (Null otherwise)
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category="SUDS|Dialogue")

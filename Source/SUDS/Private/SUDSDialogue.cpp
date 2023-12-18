@@ -100,6 +100,18 @@ void USUDSDialogue::AddParticipant(UObject* Participant)
 	}
 }
 
+bool USUDSDialogue::RemoveParticipant(UObject* Participant)
+{
+	if (IsValid(Participant))
+	{
+		int32 idx = Participants.Remove(Participant);
+		return idx >= 0;
+	}
+	else {
+		return false;
+	}
+}
+
 void USUDSDialogue::SortParticipants()
 {
 	if (!Participants.IsEmpty())
@@ -436,6 +448,30 @@ bool USUDSDialogue::IsCurrentLineVoiced() const
 	return false;
 }
 
+ISUDSParticipant* USUDSDialogue::GetSpeakerParticipant() const {
+	const FString& id = GetSpeakerID();
+
+	for (auto p : Participants) {
+		if (p->GetClass()->ImplementsInterface(USUDSParticipant::StaticClass()))
+		{
+			FString pid = ISUDSParticipant::Execute_GetSpeakerID(p);
+			if (id == pid) {
+				return Cast<ISUDSParticipant>(p);
+			}
+		}
+	}
+
+	return nullptr;
+}
+
+
+void USUDSDialogue::K2_GetSpeakerParticipant(TScriptInterface<ISUDSParticipant>& participant) {
+	ISUDSParticipant* p = GetSpeakerParticipant();
+	participant.SetInterface(p);
+}
+
+
+
 const FString& USUDSDialogue::GetSpeakerID() const
 {
 	if (CurrentSpeakerNode)
@@ -476,6 +512,104 @@ FText USUDSDialogue::GetSpeakerDisplayName() const
 	}
 	return CurrentSpeakerDisplayName;
 }
+
+
+float USUDSDialogue::GetSpeakerXPosition(const FString& speakerId) const {
+	static const FString suffix = ".xpos";
+	FName Key(speakerId + suffix);
+
+	if (auto Arg = VariableState.Find(Key)) {
+		if (Arg->GetType() == ESUDSValueType::Float) {
+			return Arg->GetFloatValue();
+		}
+		if (Arg->GetType() == ESUDSValueType::Int) {
+			return Arg->GetIntValue();
+		}
+	}
+	
+	return -100.f;  // default value
+}
+
+
+void USUDSDialogue::SetSpeakerXPosition(const FString& speakerId, float xpos) {
+	static const FString suffix = ".xpos";
+	FName Key(speakerId + suffix);
+	SetVariable(Key, xpos);
+}
+
+
+FString USUDSDialogue::GetSpeakerMood(const FString& speakerId) const {
+	static const FString suffix = ".mood";
+	FName Key(speakerId + suffix);
+
+	if (auto Arg = VariableState.Find(Key)) {
+		if (Arg->GetType() == ESUDSValueType::Name) {
+			return Arg->GetNameValue().ToString();
+		}
+	}
+	return FString("normal");
+}
+
+
+void USUDSDialogue::SetSpeakerMood(const FString& speakerId, const FString& mood) {
+	static const FString suffix = ".mood";
+	FName Key(speakerId + suffix);
+	SetVariable(Key, FSUDSValue(FName(mood), false));
+}
+
+
+void USUDSDialogue::GetSpeakerPartyLeft(TArray<FString>& outAry) const {
+	static const FName Key("party.left");
+
+	auto var = GetVariable(Key);
+	if (var.GetType() != ESUDSValueType::Text) {
+		UE_LOG(LogTemp, Warning, TEXT("Wrong variable type for speaker party"));
+		return;
+	}
+	FString text = var.GetTextValue().ToString();
+	text.ParseIntoArray(outAry, TEXT(","), true);
+}
+
+void USUDSDialogue::GetSpeakerPartyRight(TArray<FString>& outAry) const {
+	static const FName Key("party.right");
+
+	auto var = GetVariable(Key);
+	if (var.GetType() != ESUDSValueType::Text) {
+		UE_LOG(LogTemp, Warning, TEXT("Wrong variable type for speaker party"));
+		return;
+	}
+	FString text = var.GetTextValue().ToString();
+	text.ParseIntoArray(outAry, TEXT(","), true);
+}
+
+void USUDSDialogue::SetSpeakerParty(bool leftParty, const TArray<FString>& partyList) {
+	FStringBuilderBase sb;
+	for (auto& s : partyList) {
+		sb.Append(s);
+		sb.Append(",");
+	}
+	sb.RemoveSuffix(1);
+	FString list = sb.ToString();
+	if (leftParty) {
+		SetSpeakerPartyLeft(list);
+	}
+	else {
+		SetSpeakerPartyRight(list);
+	}
+}
+
+void USUDSDialogue::SetSpeakerPartyLeft( const FString& partyList) {
+	static const FName Key("party.left");
+
+	SetVariable(Key, FSUDSValue(FText::FromString(partyList)) );
+}
+
+void USUDSDialogue::SetSpeakerPartyRight(const FString& partyList) {
+	static const FName Key("party.right");
+
+	SetVariable(Key, FSUDSValue(FText::FromString(partyList)));
+}
+
 
 UDialogueVoice* USUDSDialogue::GetSpeakerVoice() const
 {
