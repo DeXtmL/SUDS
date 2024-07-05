@@ -4,7 +4,7 @@
 
 #include "SUDSDialogue.h"
 #include "SUDSScript.h"
-#include "CoreUObject/Public/UObject/Package.h"
+#include "UObject/Package.h"
 
 USUDSDialogue* USUDSLibrary::CreateDialogue(UObject* Owner, USUDSScript* Script, bool bStartImmediately, FName StartLabel)
 {
@@ -133,4 +133,22 @@ ESUDSValueType USUDSLibrary::GetDialogueValueType(const FSUDSValue& Value)
 bool USUDSLibrary::GetDialogueValueIsEmpty(const FSUDSValue& Value)
 {
 	return Value.IsEmpty();
+}
+
+bool USUDSLibrary::IsDialogueVariableGlobal(const FName& Name, FName& OutName)
+{
+	static const FString Prefix(TEXT("global."));
+	FString TempStr;
+	Name.ToString(TempStr);
+	if (TempStr.StartsWith(Prefix, ESearchCase::IgnoreCase))
+	{
+		TempStr.RightChopInline(Prefix.Len());
+		OutName = FName(TempStr);
+		return true;
+	}
+	else
+	{
+		OutName = Name;
+		return false;
+	}
 }

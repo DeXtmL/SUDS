@@ -315,6 +315,8 @@ protected:
 	bool bHeaderDone = false;
 	bool bTooLateForHeader = false;
 	bool bHeaderInProgress = false;
+	TOptional<bool> bOverrideGenerateSpeakerLineForChoice;
+	TOptional<FString> OverrideChoiceSpeakerID;
 	bool bTextInProgress = false;
 	int ChoiceUniqueId = 0;
 	/// For generating text IDs
@@ -415,6 +417,13 @@ protected:
 	                   const FString& NameForErrors,
 	                   FSUDSMessageLogger* Logger,
 	                   bool bSilent);
+	bool ParseImportSettingLine(const FStringView& Line,
+	                            ParsedTree& Tree,
+	                            int IndentLevel,
+	                            int LineNo,
+	                            const FString& NameForErrors,
+	                            FSUDSMessageLogger* Logger,
+	                            bool bSilent);
 	TMap<FName, FString> GetTextMetadataForNextEntry(int CurrentLineIndent);
 	bool IsCommentLine(const FStringView& TrimmedLine);
 	FStringView TrimLine(const FStringView& Line, int& OutIndentLevel) const;
@@ -438,11 +447,11 @@ protected:
 	                                 Logger,
 	                                 bool bSilent);
 	void ConnectRemainingNodes(ParsedTree& Tree, const FString& NameForErrors, FSUDSMessageLogger* Logger, bool bSilent);
+	void GenerateTextIDs(ParsedTree& BodyTree);
 	int FindFallthroughNodeIndex(ParsedTree& Tree, int StartNodeIndex, const FString& FromChoicePath, const FString& FromConditionalPath);
-	void RetrieveAndRemoveOrGenerateTextID(FStringView& InOutLine, FString& OutTextID);
 	bool RetrieveAndRemoveTextID(FStringView& InOutLine, FString& OutTextID);
 	bool RetrieveAndRemoveGosubID(FStringView& InOutLine, FString& OutTextID);
-	FString GenerateTextID(const FStringView& Line);
+	FString GenerateTextID();
 	const FSUDSParsedNode* GetNode(const ParsedTree& Tree, int Index = 0);
 	int GetGotoTargetNodeIndex(const ParsedTree& Tree, const FString& InLabel);
 	void PopulateAssetFromTree(USUDSScript* Asset,

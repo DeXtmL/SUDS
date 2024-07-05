@@ -10,6 +10,15 @@ When you want to change [variables](Variables.md) from script, you do it with a
 > Optionally you can use an "`=`" between the variable name and the value if you
 > want, but you don't have to.
 
+All variables are considered to be [dialogue scoped variables](Variables.md#dialogue-variables),
+unless they are prefixed with `global.`, in which case they are set as 
+[global variables](Variables.md#global-variables).
+
+```yaml
+# This sets a global variable which persists across all dialogues
+[set global.SomeBool true]
+```
+
 ## Setting Literal Values
 
 Here's how you set variables using each of the [supported types](Variables.md#supported-types)
@@ -42,6 +51,12 @@ This is for text (FText) you expect to display to the player.
 ```yaml
 [set SomeText "Hello world"]
 ```
+
+You can include double quotes inside text by using the escape (`\`) character:
+```yaml
+[set SomeText "This includes some \"Quoted\" text"]
+```
+
 
 > Note: Literal text is automatically tagged for [localisation](Localisation.md)
 > just like text in [speaker lines](SpeakerLines.md) and [choices](ChoiceLines.md).
