@@ -315,7 +315,7 @@ public:
 	/// If the position is not set, it always returns 1.1 (meaning, further at right side)
 	/// To set the x-position, use set-lines. Eg.: [set <speakerid>.xpos 0.0]
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SUDS|Dialogue")
-	float GetSpeakerXPosition(const FString& speakerId) const;
+	float GetSpeakerXPosition(const FString& speakerId, float defaultValue = -100.f) const;
 
 	/// Set the X-position of the specified speaker, it ranges from 0~1 (can be extrapolated).
 	/// By default, 0 means left, 1 means right. You can interpret this value however you like.
@@ -325,7 +325,7 @@ public:
 	// Convenient method. Get the mood of the specified character.
 	// If nothing is set, this returns "normal".
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "SUDS|Dialogue")
-	FString GetSpeakerMood(const FString& speakerId) const;
+	FString GetSpeakerMood(const FString& speakerId, const FString& defaultValue=FString("normal")) const;
 
 	// Convenient method. Set the mood of the specified character.
 	// To set the mood in the Dialogue script: [set <speakerID>.mood `mood`]
@@ -558,6 +558,17 @@ public:
 			return *Arg;
 		}
 		return FSUDSValue();
+	}
+
+	UFUNCTION(BlueprintCallable, Category = "SUDS|Dialogue")
+	bool GetVariableSafe(FName Name, FSUDSValue& varOut) const
+	{
+		if (const auto Arg = VariableState.Find(Name))
+		{
+			varOut = *Arg;
+			return true;
+		}
+		return false;
 	}
 
 	UFUNCTION(BlueprintCallable, Category="SUDS|Dialogue")

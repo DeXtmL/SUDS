@@ -514,7 +514,7 @@ FText USUDSDialogue::GetSpeakerDisplayName() const
 }
 
 
-float USUDSDialogue::GetSpeakerXPosition(const FString& speakerId) const {
+float USUDSDialogue::GetSpeakerXPosition(const FString& speakerId, float defaultValue) const {
 	static const FString suffix = ".xpos";
 	FName Key(speakerId + suffix);
 
@@ -527,7 +527,7 @@ float USUDSDialogue::GetSpeakerXPosition(const FString& speakerId) const {
 		}
 	}
 	
-	return -100.f;  // default value
+	return defaultValue;
 }
 
 
@@ -538,7 +538,7 @@ void USUDSDialogue::SetSpeakerXPosition(const FString& speakerId, float xpos) {
 }
 
 
-FString USUDSDialogue::GetSpeakerMood(const FString& speakerId) const {
+FString USUDSDialogue::GetSpeakerMood(const FString& speakerId, const FString& defaultValue) const {
 	static const FString suffix = ".mood";
 	FName Key(speakerId + suffix);
 
@@ -547,7 +547,7 @@ FString USUDSDialogue::GetSpeakerMood(const FString& speakerId) const {
 			return Arg->GetNameValue().ToString();
 		}
 	}
-	return FString("normal");
+	return defaultValue;
 }
 
 

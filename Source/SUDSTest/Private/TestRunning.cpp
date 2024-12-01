@@ -458,4 +458,4 @@ bool FTestLinesBetweenTextAndChoice::RunTest(const FString& Parameters)
 	return true;
 }
 
-PRAGMA_ENABLE_OPTIMIZATION
+UE_ENABLE_OPTIMIZATION_SHIP

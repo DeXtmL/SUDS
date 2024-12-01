@@ -871,4 +871,4 @@ bool FTestMultipleOptionalChoicesWithLinesBetweenTextAndChoice::RunTest(const FS
 }
 
 
-PRAGMA_ENABLE_OPTIMIZATION
+UE_ENABLE_OPTIMIZATION_SHIP

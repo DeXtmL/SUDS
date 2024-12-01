@@ -414,4 +414,4 @@ bool FTestGosubBetweenSpeakerAndChoice2::RunTest(const FString& Parameters)
 }
 
 
-PRAGMA_ENABLE_OPTIMIZATION
+UE_ENABLE_OPTIMIZATION_SHIP
