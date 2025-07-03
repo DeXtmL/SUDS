@@ -5,7 +5,7 @@
 #include "SUDSScriptNode.h"
 #include "TestUtils.h"
 
-PRAGMA_DISABLE_OPTIMIZATION
+UE_DISABLE_OPTIMIZATION
 
 const FString SimpleParsingInput = R"RAWSUD(
 ===
@@ -82,6 +82,7 @@ const FString SetVariableParsingInput = R"RAWSUD(
 [set ValetName "Bob"]
 [set SomeFloat 12.5]
 [set SomeName `AName`]
+[set EmbeddedQuoteString "Hello this has some \"Embedded Quotes\""]
 ===
 
 Player: Hello
@@ -673,6 +674,8 @@ bool FTestSetVariableParsing::RunTest(const FString& Parameters)
 	TestParsedSetLiteral(this, "Header node 3", NextNode, "SomeFloat", 12.5f);
 	TestGetParsedNextNode(this, "Header node 3 next", NextNode, Importer, true, &NextNode);
 	TestParsedSetLiteral(this, "Header node 4", NextNode, "SomeName", FName("AName"));
+	TestGetParsedNextNode(this, "Header node 4 next", NextNode, Importer, true, &NextNode);
+	TestParsedSetLiteral(this, "Header node 5", NextNode, "EmbeddedQuoteString", "Hello this has some \"Embedded Quotes\"");
 
 	// Now body nodes
 	NextNode = Importer.GetNode(0);
@@ -861,8 +864,8 @@ Vagabond: Well met, fellow!
   * Er, hi?    
 	Vagabond: Verily, 'tis wondrous to see such a fine fellow on the road this morn!
 	[goto FriendlyChat]
-  * Jog on, mate    @0004@
-	Vagabond: Well, really! Good day then sir!    @0005@
+  * Jog on, mate    @0001@
+	Vagabond: Well, really! Good day then sir!    @0002@
 	[goto end]
 
 :FriendlyChat
@@ -887,11 +890,23 @@ bool FTestPartiallyLocalised::RunTest(const FString& Parameters)
 	auto NextNode = Importer.GetNode(0);
 
 	TestParsedText(this, "Start node", NextNode, "Vagabond", "Well met, fellow!");
+	// Test that we generated unique textIDs for inserted lines that are unique
+	// Should be after the last explicit one
+	TestFalse("TextID should be populated", NextNode->TextID.IsEmpty());
+	TestEqual("TextID should be correct", NextNode->TextID, "@0008@");
 	TestGetParsedNextNode(this, "Next", NextNode, Importer, false, &NextNode);
 	if (TestParsedChoice(this, "First choice", NextNode, 2))
 	{
+		TestFalse("TextID should be populated", NextNode->Edges[0].TextID.IsEmpty());
+		TestEqual("TextID should be correct", NextNode->Edges[0].TextID, "@0009@");
+		TestFalse("TextID should be populated", NextNode->Edges[1].TextID.IsEmpty());
+		TestEqual("TextID should be correct", NextNode->Edges[1].TextID, "@0001@");
+
 		TestParsedChoiceEdge(this, "First choice", NextNode, 0, "Er, hi?", Importer, &NextNode);
 		TestParsedText(this, "Next node", NextNode, "Vagabond", "Verily, 'tis wondrous to see such a fine fellow on the road this morn!");
+		TestFalse("TextID should be populated", NextNode->TextID.IsEmpty());
+		TestEqual("TextID should be correct", NextNode->TextID, "@000a@");
+		
 		TestGetParsedNextNode(this, "Next", NextNode, Importer, false, &NextNode);
 		TestParsedGoto(this, "Goto", NextNode, Importer, &NextNode);
 		TestParsedText(this, "Next node", NextNode, "Vagabond", "Mayhaps we could travel together a while, and share a tale or two?\nWhat do you say?");
@@ -902,10 +917,10 @@ bool FTestPartiallyLocalised::RunTest(const FString& Parameters)
 	TestGetParsedNextNode(this, "Next", NextNode, Importer, false, &NextNode);
 	if (TestParsedChoice(this, "First choice", NextNode, 2))
 	{
-		TestEqual("TextID should be correct", NextNode->Edges[1].TextID, "@0004@");
+		TestEqual("TextID should be correct", NextNode->Edges[1].TextID, "@0001@");
 		TestParsedChoiceEdge(this, "First choice", NextNode, 1, "Jog on, mate", Importer, &NextNode);
 		TestParsedText(this, "Next node", NextNode, "Vagabond", "Well, really! Good day then sir!");
-		TestEqual("TextID should be correct", NextNode->TextID, "@0005@");
+		TestEqual("TextID should be correct", NextNode->TextID, "@0002@");
 	}
 	
 	return true;
@@ -943,4 +958,232 @@ bool FTestParseChoiceProblem::RunTest(const FString& Parameters)
 	return true;
 }
 
-UE_ENABLE_OPTIMIZATION_SHIP
+const FString TrailingEventInput = R"RAWSUD(
+
+NPC: Well, hello there. This is a test.
+* Choice
+	[event SomeEvent 1]
+)RAWSUD";
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTestTrailingEventProblem,
+								 "SUDSTest.TestTrailingEventProblem",
+								 EAutomationTestFlags::EditorContext |
+								 EAutomationTestFlags::ClientContext |
+								 EAutomationTestFlags::ProductFilter)
+
+
+bool FTestTrailingEventProblem::RunTest(const FString& Parameters)
+{
+	FSUDSMessageLogger Logger(false);
+	FSUDSScriptImporter Importer;
+	TestTrue("Import should succeed", Importer.ImportFromBuffer(GetData(TrailingEventInput), TrailingEventInput.Len(), "TrailingEventInput", &Logger, true));
+
+	return true;
+}
+
+const FString ConditionalChoicesNestedAndSiblingsInput = R"RAWSUD(
+
+Player: Hello
+
+[if {TopCondition} == 0]
+    * Top level choice 1
+        [goto outro]
+[endif]
+
+[if {TopCondition} == 1]
+        * Top level choice 2
+            [goto outro]
+    [if {NestedCondition1} == 1]
+        * Nested condition choice 1
+            [goto outro]
+    [endif]
+    [if {NestedCondition2} == 0]
+        * Nested condition choice 2
+            [goto outro]
+    [endif]
+    [if {NestedCondition3} == 1]
+        * Nested condition choice 3
+            [goto outro]
+    [endif]
+[endif]
+
+:outro
+Player: Bye
+)RAWSUD";
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTestConditionalChoicesNestedAndSiblings,
+								 "SUDSTest.TestConditionalChoicesNestedAndSiblings",
+								 EAutomationTestFlags::EditorContext |
+								 EAutomationTestFlags::ClientContext |
+								 EAutomationTestFlags::ProductFilter)
+
+
+bool FTestConditionalChoicesNestedAndSiblings::RunTest(const FString& Parameters)
+{
+	FSUDSMessageLogger Logger(false);
+	FSUDSScriptImporter Importer;
+	TestTrue("Import should succeed", Importer.ImportFromBuffer(GetData(ConditionalChoicesNestedAndSiblingsInput), ConditionalChoicesNestedAndSiblingsInput.Len(), "ConditionalChoicesNestedAndSiblingsInput", &Logger, true));
+
+
+	auto Asset = NewObject<USUDSScript>(GetTransientPackage(), "Test");
+	const ScopedStringTableHolder StringTableHolder;
+	Importer.PopulateAsset(Asset, StringTableHolder.StringTable);
+
+	auto StartNode = Asset->GetFirstNode();
+	if (!TestNotNull("Start node should be true", StartNode))
+	{
+		return false;
+	}
+
+	TestTextNode(this, "Start node", StartNode, "Player", "Hello");
+
+	auto NextNode = StartNode;
+	if (!TestEqual("Start node edges", NextNode->GetEdgeCount(), 1))
+	{
+		return false;
+	}
+	
+	auto pEdge = NextNode->GetEdge(0);
+	if (!TestNotNull("Start node edge", pEdge))
+	{
+		return false;
+	}
+
+	/* Node structure:
+		T -> C1
+		C1 -> S1 -> (if TopCondition == 0) C2 --> Top level choice 1
+		C1 -> S2 -> (if TopCondition == 1) C3 -> Top Level choice 2
+                                           |-> S3 -> (if NestedCondition1 == 1) -> C4 -> Nested condition choice 1
+                                           |-> S4 -> (if NestedCondition2 == 0) -> C5 -> Nested condition choice 2
+                                           |-> S5 -> (if NestedCondition3 == 0) -> C5 -> Nested condition choice 3
+	 */
+	
+	NextNode = pEdge->GetTargetNode().Get();
+	if (TestChoiceNode(this, "Start node next", NextNode, 2))
+	{
+		auto ChoiceNode = NextNode;
+		// Top condition == 0 subtree
+		if (TestChoiceEdge(this, "Select Path 1", ChoiceNode, 0, "", &NextNode))
+		{
+			if (TestSelectNode(this, "Select 1", NextNode, 1))
+			{
+				if (TestSelectEdge(this, "Select 1 Edge", NextNode, 0, "{TopCondition} == 0", &NextNode))
+				{
+					if (TestChoiceNode(this, "Choice 1 Leaf", NextNode, 1))
+					{
+						TestChoiceEdge(this, "Choice 1 Leaf Edge", NextNode, 0, "Top level choice 1", &NextNode);
+					}
+				}
+			}
+		}
+
+		// Top condition == 1 subtree
+		if (TestChoiceEdge(this, "Select Path 2", ChoiceNode, 1, "", &NextNode))
+		{
+			if (TestSelectNode(this, "Select 2", NextNode, 1))
+			{
+				if (TestSelectEdge(this, "Select 2 Edge", NextNode, 0, "{TopCondition} == 1", &NextNode))
+				{
+					// This choice node holds the non-nested condition choice, plus 3 more nested selects
+					// Because each condition is a sibling they become separate select subtrees
+					if (TestChoiceNode(this, "Choice 2 Mid", NextNode, 4))
+					{
+						auto ChoiceNode2 = NextNode;
+						TestChoiceEdge(this, "Choice 2 Leaf Edge 1", ChoiceNode2, 0, "Top level choice 2", &NextNode);
+
+						if (TestChoiceEdge(this, "Choice 2 To Select Edge 1", ChoiceNode2, 1, "", &NextNode))
+						{
+							if (TestSelectNode(this, "Select 2", NextNode, 1))
+							{
+								if (TestSelectEdge(this, "Select 2 Edge", NextNode, 0, "{NestedCondition1} == 1", &NextNode))
+								{
+									if (TestChoiceNode(this, "Choice 2 Leaf", NextNode, 1))
+									{
+										TestChoiceEdge(this, "Choice 2 Leaf Edge", NextNode, 0, "Nested condition choice 1", &NextNode);
+									}
+								}
+							}
+						}
+
+						if (TestChoiceEdge(this, "Choice 2 To Select Edge 2", ChoiceNode2, 2, "", &NextNode))
+						{
+							if (TestSelectNode(this, "Select 3", NextNode, 1))
+							{
+								if (TestSelectEdge(this, "Select 3 Edge", NextNode, 0, "{NestedCondition2} == 0", &NextNode))
+								{
+									if (TestChoiceNode(this, "Choice 3 Leaf", NextNode, 1))
+									{
+										TestChoiceEdge(this, "Choice 3 Leaf Edge", NextNode, 0, "Nested condition choice 2", &NextNode);
+									}
+								}
+							}
+						}
+
+						if (TestChoiceEdge(this, "Choice 2 To Select Edge 3", ChoiceNode2, 3, "", &NextNode))
+						{
+							if (TestSelectNode(this, "Select 4", NextNode, 1))
+							{
+								if (TestSelectEdge(this, "Select 4 Edge", NextNode, 0, "{NestedCondition3} == 1", &NextNode))
+								{
+									if (TestChoiceNode(this, "Choice 4 Leaf", NextNode, 1))
+									{
+										TestChoiceEdge(this, "Choice 4 Leaf Edge", NextNode, 0, "Nested condition choice 3", &NextNode);
+									}
+								}
+							}
+						}
+
+					}
+				}
+			}
+		}
+
+		
+	}
+	return true;
+}
+
+// The deliberate mistake here is that the speaker lines are not indented underneath the choices,
+// which when combined with the conditionals confuses the parser so that it leaves all but the
+// first choice orphaned and unreachable. Import should report this to the user
+const FString ErrorsReportedForBadChoiceIndentsInput = R"RAWSUD(
+
+npc: hello
+:chatchoices
+    [if {npc_hasQuests}]
+        * Any news?
+        player: Any news?
+    [endif]
+    [if {npc_canTrade}]
+        * Trade
+        player: What do you have for sale?
+    [endif]
+    [if {npc_hasLore}]
+        * How are you?
+        player: How are things?
+    [endif]
+        * Nevermind
+        npc: Alright. Come back anytime.
+)RAWSUD";
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTestErrorsReportedForBadChoiceIndents,
+								 "SUDSTest.TestErrorsReportedForBadChoiceIndents",
+								 EAutomationTestFlags::EditorContext |
+								 EAutomationTestFlags::ClientContext |
+								 EAutomationTestFlags::ProductFilter)
+
+
+bool FTestErrorsReportedForBadChoiceIndents::RunTest(const FString& Parameters)
+{
+	FSUDSMessageLogger Logger(false);
+	FSUDSScriptImporter Importer;
+	TestTrue("Import should succeed", Importer.ImportFromBuffer(GetData(ErrorsReportedForBadChoiceIndentsInput), ErrorsReportedForBadChoiceIndentsInput.Len(), "ErrorsReportedForBadChoiceIndentsInput", &Logger, true));
+
+	TestTrue("Errors should have been logged", Logger.HasErrors());
+	return true;
+}
+
+
+
+UE_ENABLE_OPTIMIZATION

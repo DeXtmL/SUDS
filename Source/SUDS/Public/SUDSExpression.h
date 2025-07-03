@@ -12,6 +12,7 @@ enum class ESUDSExpressionItemType : uint8
 	Not = 4,
 	Multiply = 10,
 	Divide = 11,
+	Modulo = 12,
 	Add = 20,
 	Subtract = 21,
 	Less = 30,
@@ -96,10 +97,11 @@ protected:
 	FString SourceString;
 
 	FSUDSExpressionItem EvaluateOperator(ESUDSExpressionItemType Op,
-	                                       const FSUDSExpressionItem& Arg1,
-	                                       const FSUDSExpressionItem& Arg2,
-	                                       const TMap<FName, FSUDSValue>& Variables) const;
-	FSUDSValue EvaluateOperand(const FSUDSValue& Operand, const TMap<FName, FSUDSValue>& Variables) const;
+	                                     const FSUDSExpressionItem& Arg1,
+	                                     const FSUDSExpressionItem& Arg2,
+	                                     const TMap<FName, FSUDSValue>& Variables,
+	                                     const TMap<FName, FSUDSValue>& GlobalVariables) const;
+	FSUDSValue EvaluateOperand(const FSUDSValue& Operand, const TMap<FName, FSUDSValue>& Variables, const TMap<FName, FSUDSValue>& GlobalVariables) const;
 
 	bool Validate();
 
@@ -124,11 +126,15 @@ public:
 	 */
 	bool ParseFromString(const FString& Expression, FString* OutParseError);
 
+	/// Reset the expression to return true 
+	void Reset();
+
+
 	/// Evaluate the expression and return the result, using a given variable state 
-	FSUDSValue Evaluate(const TMap<FName, FSUDSValue>& Variables) const;
+	FSUDSValue Evaluate(const TMap<FName, FSUDSValue>& Variables, const TMap<FName, FSUDSValue>& GlobalVariables) const;
 
 	/// Evaluate the expression and return the result as a boolean, using a given variable state 
-	bool EvaluateBoolean(const TMap<FName, FSUDSValue>& Variables, const FString& ErrorContext) const;
+	bool EvaluateBoolean(const TMap<FName, FSUDSValue>& Variables, const TMap<FName, FSUDSValue>& GlobalVariables, const FString& ErrorContext) const;
 
 	/// Get the original source of the expression as a string
 	const FString& GetSourceString() const { return SourceString; }
@@ -141,6 +147,9 @@ public:
 
 	/// Get the list of variables this expression needs
 	const TArray<FName>& GetVariableNames() const { return VariableNames; }
+	
+	/// Return whether this expression is a generated random condition
+	bool IsRandomCondition() const;
 
 	/**
 	 * Attempt to parse an operand from a string. Returns true if this string is a valid operand, which means a literal

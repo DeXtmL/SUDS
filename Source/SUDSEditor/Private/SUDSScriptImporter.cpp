@@ -2,6 +2,7 @@
 // Released under the MIT license https://opensource.org/license/MIT/
 #include "SUDSScriptImporter.h"
 
+#include "SUDSEditorSettings.h"
 #include "SUDSExpression.h"
 #include "SUDSMessageLogger.h"
 #include "SUDSScript.h"
@@ -14,11 +15,11 @@
 #include "Internationalization/StringTable.h"
 #include "Internationalization/StringTableCore.h"
 
+class USUDSEditorSettings;
 const FString FSUDSScriptImporter::EndGotoLabel = "end";
 const FString FSUDSScriptImporter::TreePathSeparator = "/";
 
 DEFINE_LOG_CATEGORY(LogSUDSImporter)
-
 
 bool FSUDSScriptImporter::ImportFromBuffer(const TCHAR *Start, int32 Length, const FString& NameForErrors, FSUDSMessageLogger* Logger, bool bSilent)
 {
@@ -41,6 +42,9 @@ bool FSUDSScriptImporter::ImportFromBuffer(const TCHAR *Start, int32 Length, con
 	bool bImportedOK = true;
 	ChoiceUniqueId = 0;
 	TextIDHighestNumber = 0;
+	bOverrideGenerateSpeakerLineForChoice.Reset();
+	OverrideChoiceSpeakerID.Reset();
+	ReferencedSpeakers.Empty();
 	if (Start)
 	{
 		int32 SubstringBeginIndex = 0;
@@ -95,6 +99,8 @@ bool FSUDSScriptImporter::ImportFromBuffer(const TCHAR *Start, int32 Length, con
 
 	ConnectRemainingNodes(HeaderTree, NameForErrors, Logger, bSilent);
 	ConnectRemainingNodes(BodyTree, NameForErrors, Logger, bSilent);
+	GenerateTextIDs(HeaderTree);
+	GenerateTextIDs(BodyTree);
 
 	bImportedOK = PostImportSanityCheck(NameForErrors, Logger, bSilent) && bImportedOK;
 
@@ -299,6 +305,8 @@ bool FSUDSScriptImporter::ParseHeaderLine(const FStringView& Line, int IndentLev
 	if (Line.StartsWith(TEXT('[')))
 	{
 		bool bParsed = ParseSetLine(Line, HeaderTree, 0, LineNo, NameForErrors, Logger, bSilent);
+		if (!bParsed)
+			bParsed = ParseImportSettingLine(Line, HeaderTree, 0, LineNo, NameForErrors, Logger, bSilent);;
 	}
 	
 	return true;
@@ -355,6 +363,10 @@ bool FSUDSScriptImporter::ParseBodyLine(const FStringView& Line,
 			bParsed = ParseGosubLine(Line, BodyTree, IndentLevel, LineNo, NameForErrors, Logger, bSilent);
 		if (!bParsed)
 			bParsed = ParseReturnLine(Line, BodyTree, IndentLevel, LineNo, NameForErrors, Logger, bSilent);
+		if (!bParsed)
+			bParsed = ParseImportSettingLine(Line, BodyTree, IndentLevel, LineNo, NameForErrors, Logger, bSilent);
+		if (!bParsed)
+			bParsed = ParseRandomLine(Line, BodyTree, IndentLevel, LineNo, NameForErrors, Logger, bSilent);
 
 		if (!bParsed)
 		{
@@ -371,7 +383,6 @@ bool FSUDSScriptImporter::ParseBodyLine(const FStringView& Line,
 	{
 		return ParseTextLine(Line, BodyTree, IndentLevel, LineNo, NameForErrors, Logger, bSilent);
 	}
-	
 }
 
 bool FSUDSScriptImporter::IsLastNodeOfType(const FSUDSScriptImporter::ParsedTree& Tree, ESUDSParsedNodeType Type)
@@ -396,9 +407,11 @@ int FSUDSScriptImporter::FindLastChoiceNode(const ParsedTree& Tree, int IndentLe
 	return Ret;
 }
 
-int FSUDSScriptImporter::FindChoiceAfterTextNode(const FSUDSScriptImporter::ParsedTree& Tree, int TextNodeIdx)
+int FSUDSScriptImporter::FindChoiceAfterTextNode(const FSUDSScriptImporter::ParsedTree& Tree, int TextNodeIdx, const FString& ConditionalPath)
 {
 	const auto& TextNode = Tree.Nodes[TextNodeIdx];
+
+	int RootChoiceIdx = -1;
 	if (TextNode.Edges.Num() == 1 && Tree.Nodes.IsValidIndex(TextNode.Edges[0].TargetNodeIdx))
 	{
 		int NextNodeIdx = TextNode.Edges[0].TargetNodeIdx;
@@ -410,26 +423,108 @@ int FSUDSScriptImporter::FindChoiceAfterTextNode(const FSUDSScriptImporter::Pars
 			case ESUDSParsedNodeType::Select:
 			case ESUDSParsedNodeType::Text:
 				// Didn't find
-				return -1;
+				break;
 			case ESUDSParsedNodeType::Choice:
-				return NextNodeIdx;
+				RootChoiceIdx = NextNodeIdx;
+				NextNodeIdx = -1; // to break out of loop
+				break;
 			case ESUDSParsedNodeType::SetVariable:
 			case ESUDSParsedNodeType::Goto:
 			case ESUDSParsedNodeType::Event:
+				// Cascade through events to find the first choice
 				if (Node.Edges.Num() == 1)
 				{
 					NextNodeIdx = Node.Edges[0].TargetNodeIdx;
 				}
 				else
 				{
-					return -1;
+					NextNodeIdx = -1;
 				}
 				break;
 			default: ;
 			};
 		}
+
+		if (RootChoiceIdx == -1)
+		{
+			return -1;
+		}
+
+		// Now we've found the first choice after the text node
+		// BUT if there are conditional choices, there are select nodes underneath this, with
+		// more choice nodes. We want to find the deepest matching one and use the choice under that.
+		return RecurseChoiceNodeFindDeepest(Tree, RootChoiceIdx, ConditionalPath);
+
 	}
 	return -1;
+	
+}
+
+int FSUDSScriptImporter::RecurseChoiceNodeFindDeepest(const ParsedTree& Tree,
+	int FromChoiceIdx,
+	const FString& ConditionalPath)
+{
+	// We need to recurse from the Choice and any sequence of S->C->S->C is valid
+	// so long as the condition path matches. The deepest one is the best
+	// So here we're a Choice, and we can recurse into any Selects, and any Choices under that
+	// where the edge condition is a subset of ConditionalPath
+
+	int Ret = FromChoiceIdx;
+
+	if (Tree.Nodes.IsValidIndex(FromChoiceIdx))
+	{
+		const auto& Choice = Tree.Nodes[FromChoiceIdx];
+		for (int i = 0; i < Choice.Edges.Num(); ++i)
+		{
+			const auto& Edge = Choice.Edges[i];
+			if (Edge.Text.IsEmpty() && Tree.Nodes.IsValidIndex(Edge.TargetNodeIdx) && Tree.Nodes[Edge.TargetNodeIdx].NodeType == ESUDSParsedNodeType::Select)
+			{
+				int ChildIdx = RecurseSelectNodeFindDeepestChoice(Tree, Edge.TargetNodeIdx, ConditionalPath);
+				// There should be only one that matches conditional
+				if (ChildIdx != -1)
+				{
+					Ret = ChildIdx;
+					break;
+				}
+			}
+		}
+	}
+	return Ret;
+}
+
+int FSUDSScriptImporter::RecurseSelectNodeFindDeepestChoice(const ParsedTree& Tree,
+	int FromSelectNode,
+	const FString& ConditionalPath)
+{
+	// Default to not having found a choice that matches conditional
+	int Ret = -1;
+
+	if (Tree.Nodes.IsValidIndex(FromSelectNode))
+	{
+		const auto& Select = Tree.Nodes[FromSelectNode];
+		for (int i = 0; i < Select.Edges.Num(); ++i)
+		{
+			const auto& Edge = Select.Edges[i];
+			if (Tree.Nodes.IsValidIndex(Edge.TargetNodeIdx) && Tree.Nodes[Edge.TargetNodeIdx].NodeType == ESUDSParsedNodeType::Choice)
+			{
+				// It might be this choice node, IF edge matches the conditional path
+				FString ChoiceConditionalPath = GetTreeConditionalPath(Tree, Edge.TargetNodeIdx);
+
+				if (ConditionalPath.StartsWith(ChoiceConditionalPath))
+				{
+					// But also we recurse from here because there may be other nested Selects which match closer
+					int ChildIdx = RecurseChoiceNodeFindDeepest(Tree, Edge.TargetNodeIdx, ConditionalPath);
+					// There should be only one that matches conditional
+					if (ChildIdx != -1)
+					{
+						Ret = ChildIdx;
+						break;
+					}
+				}
+			}
+		}
+	}
+	return Ret;
 	
 }
 
@@ -515,16 +610,49 @@ bool FSUDSScriptImporter::ParseChoiceLine(const FStringView& Line,
 		// Inside each choice, everything should be indented at least as much as 1 character inside the *
 		// We provide the edge with context C001, C002 etc for fallthrough
 		PushIndent(Tree, ChoiceNodeIdx, IndentLevel + 1, FString::Printf(TEXT("C%03d"), ++ChoiceUniqueId));
+
+		// Do we want to generate a speaker line for this choice
+		bool bGenerateSpeakerLine = false;
+		FString GeneratedSpeakerID;
+		if (const auto Settings = GetDefault<USUDSEditorSettings>())
+		{
+			bGenerateSpeakerLine = Settings->AlwaysGenerateSpeakerLinesFromChoices;
+			GeneratedSpeakerID = Settings->SpeakerIdForGeneratedLinesFromChoices;
+		}
+		if (bOverrideGenerateSpeakerLineForChoice.IsSet())
+		{
+			bGenerateSpeakerLine = bOverrideGenerateSpeakerLineForChoice.GetValue();
+		}
+		if (OverrideChoiceSpeakerID.IsSet())
+		{
+			GeneratedSpeakerID = OverrideChoiceSpeakerID.GetValue();
+		}
+		int ChoiceTextStart = 1;
+		if (Line.Len() > 1 && Line[1] == '-')
+		{
+			// *- prefix, override speaker line
+			bGenerateSpeakerLine = false;
+			ChoiceTextStart = 2;
+		}
 		
 		// Add a pending edge, with the choice text
 		// Following things fill in the edge details, the next node to be parsed will finalise the destination
 		FString ChoiceTextID;
-		auto ChoiceTextView = Line.SubStr(1, Line.Len() - 1).TrimStart();
-		RetrieveAndRemoveOrGenerateTextID(ChoiceTextView, ChoiceTextID);
-		const int EdgeIdx = ChoiceNode.Edges.Add(FSUDSParsedEdge(ChoiceNodeIdx, -1, LineNo, FString(ChoiceTextView), ChoiceTextID, GetTextMetadataForNextEntry(IndentLevel)));
+		auto ChoiceTextView = Line.SubStr(ChoiceTextStart, Line.Len() - ChoiceTextStart).TrimStart();
+		// TextID might be blank after this, but that's OK, we fix later after we know what IDs are in use
+		RetrieveAndRemoveTextID(ChoiceTextView, ChoiceTextID);
+		const FString ChoiceText = FString(ChoiceTextView);
+		auto ChoiceTextMeta = GetTextMetadataForNextEntry(IndentLevel);
+		const int EdgeIdx = ChoiceNode.Edges.Add(FSUDSParsedEdge(ChoiceNodeIdx, -1, LineNo, ChoiceText, ChoiceTextID, ChoiceTextMeta));
 		Tree.EdgeInProgressNodeIdx = ChoiceNodeIdx;
 		Tree.EdgeInProgressEdgeIdx = EdgeIdx;
-		
+
+		if (bGenerateSpeakerLine)
+		{
+			// We use the same text & ID so this is just one localisation entry
+			Ctx.LastTextNodeIdx = AppendNode(Tree, FSUDSParsedNode(GeneratedSpeakerID, ChoiceText, ChoiceTextID, ChoiceTextMeta, IndentLevel + 1, LineNo));
+			ReferencedSpeakers.AddUnique(GeneratedSpeakerID);			
+		}
 		return true;
 	}
 	return false;
@@ -583,7 +711,7 @@ void FSUDSScriptImporter::EnsureChoiceNodeExistsAboveSelect(ParsedTree& Tree, in
 		if (Tree.Nodes.IsValidIndex(TopSelectIdx) && Tree.Nodes.IsValidIndex(Ctx.LastTextNodeIdx))
 		{
 			// Choice node might not be directly underneath
-			const int ChoiceIdx = FindChoiceAfterTextNode(Tree, Ctx.LastTextNodeIdx);
+			const int ChoiceIdx = FindChoiceAfterTextNode(Tree, Ctx.LastTextNodeIdx, Tree.Nodes[TopSelectIdx].ConditionalPath);
 			if (ChoiceIdx != -1)
 			{
 				auto& SelNode = Tree.Nodes[TopSelectIdx];
@@ -682,7 +810,10 @@ bool FSUDSScriptImporter::ParseElseLine(const FStringView& Line,
 		if (Block.Stage != EConditionalStage::ElseStage)
 		{
 			Block.Stage = EConditionalStage::ElseStage;
-			Block.ConditionStr = "";
+			// We need to give each else a unique condition string, otherwise sibling else's can be considered
+			// equivalent, when they in fact originate from different if's
+			// ID by select node index
+			Block.ConditionPathElement = MakeElseConditionPathElement(Block.SelectNodeIdx);
 			const int NodeIdx = Block.SelectNodeIdx;
 				
 			auto& SelectNode = Tree.Nodes[NodeIdx];
@@ -711,6 +842,23 @@ bool FSUDSScriptImporter::ParseElseLine(const FStringView& Line,
 		UE_LOG(LogSUDSImporter, VeryVerbose, TEXT("%3d:%2d: ELSE  : %s"), LineNo, IndentLevel, *FString(Line));
 	return true;
 	
+}
+
+FString FSUDSScriptImporter::MakeIfConditionPathElement(int SelectNodeIdx,
+	const FString& ConditionStr)
+{
+	return ConditionStr;
+}
+
+FString FSUDSScriptImporter::MakeElseIfConditionPathElement(int SelectNodeIdx,
+	const FString& ConditionStr)
+{
+	return FString::Printf(TEXT("elseif-%d %s"), SelectNodeIdx, *ConditionStr);
+}
+
+FString FSUDSScriptImporter::MakeElseConditionPathElement(int SelectNodeIdx)
+{
+	return FString::Printf(TEXT("else-%d"), SelectNodeIdx);
 }
 
 bool FSUDSScriptImporter::ParseEndIfLine(const FStringView& Line,
@@ -772,7 +920,7 @@ bool FSUDSScriptImporter::ParseIfLine(const FStringView& Line,
 	Tree.EdgeInProgressEdgeIdx = EdgeIdx;
 			
 	Tree.CurrentConditionalBlockIdx = Tree.ConditionalBlocks.Add(
-		ConditionalContext(NewNodeIdx, Tree.CurrentConditionalBlockIdx, EConditionalStage::IfStage, ConditionStr));
+		ConditionalContext(NewNodeIdx, Tree.CurrentConditionalBlockIdx, EConditionalStage::IfStage, MakeIfConditionPathElement(NewNodeIdx, ConditionStr)));
 	
 	return true;
 	
@@ -800,7 +948,10 @@ bool FSUDSScriptImporter::ParseElseIfLine(const FStringView& Line,
 		if (Block.Stage != EConditionalStage::ElseStage)
 		{
 			Block.Stage = EConditionalStage::ElseIfStage;
-			Block.ConditionStr = ConditionStr;
+			// For the purposes of the block, the condition isn't just the condition contained here,
+			// it's also the negation of the original "if". This is to prevent multiple sibling
+			// elseifs merging if they contain the same condition but are attached to different ifs
+			Block.ConditionPathElement = MakeElseIfConditionPathElement(Block.SelectNodeIdx, ConditionStr);
 			const int NodeIdx = Block.SelectNodeIdx;
 				
 			auto& SelectOrChoiceNode = Tree.Nodes[NodeIdx];
@@ -880,6 +1031,187 @@ bool FSUDSScriptImporter::ParseConditionalLine(const FStringView& Line,
 		
 	return false;
 }
+
+bool FSUDSScriptImporter::ParseRandomLine(const FStringView& Line,
+	ParsedTree& Tree,
+	int IndentLevel,
+	int LineNo,
+	const FString& NameForErrors,
+	FSUDSMessageLogger* Logger,
+	bool bSilent)
+{
+	if (!IsRandomLine(Line))
+		return false;
+	
+	else if (Line.Equals(TEXT("[random]")))
+	{
+		return ParseBeginRandomLine(Line, Tree, IndentLevel, LineNo, NameForErrors, Logger, bSilent);
+	}
+	else if (Line.Equals(TEXT("[or]")))
+	{
+		return ParseRandomOptionLine(Line, Tree, IndentLevel, LineNo, NameForErrors, Logger, bSilent);
+		
+	}
+	else if (Line.Equals(TEXT("[endrandom]")))
+	{
+		return ParseEndRandomLine(Line, Tree, IndentLevel, LineNo, NameForErrors, Logger, bSilent);
+	}
+		
+	return false;	
+}
+
+bool FSUDSScriptImporter::IsRandomLine(const FStringView& Line)
+{
+	return Line.StartsWith(TEXT("[random")) ||
+		Line.StartsWith(TEXT("[or")) ||
+		Line.StartsWith(TEXT("[endrandom"));
+}
+
+bool FSUDSScriptImporter::ParseBeginRandomLine(const FStringView& Line,
+	ParsedTree& Tree,
+	int IndentLevel,
+	int LineNo,
+	const FString& NameForErrors,
+	FSUDSMessageLogger* Logger,
+	bool bSilent)
+{
+	if (!bSilent)
+		UE_LOG(LogSUDSImporter, VeryVerbose, TEXT("%3d:%2d: RANDOM: %s"), LineNo, IndentLevel, *FString(Line));
+
+	// New random level always creates node				
+	const int NewNodeIdx = AppendNode(Tree, FSUDSParsedNode(ESUDSParsedNodeType::Select, IndentLevel, LineNo));
+	auto& SelectNode = Tree.Nodes[NewNodeIdx];
+	const int EdgeIdx = SelectNode.Edges.Add(FSUDSParsedEdge(NewNodeIdx, -1, LineNo));
+	FString ConditionStr = FString::Printf(TEXT("{%hs} == 0"), SUDS_RANDOMITEM_VAR);
+	auto E = &SelectNode.Edges[EdgeIdx];
+	{
+		// Set the condition automatically based on internal random number var
+		FString ParseError;
+		if (!E->ConditionExpression.ParseFromString(ConditionStr, &ParseError))
+		{
+			if (!bSilent)
+				Logger->Logf(ELogVerbosity::Error, TEXT("Error in %s line %d: %s"), *NameForErrors, LineNo, *ParseError);
+		}
+	}
+
+	Tree.EdgeInProgressNodeIdx = NewNodeIdx;
+	Tree.EdgeInProgressEdgeIdx = EdgeIdx;
+			
+	Tree.CurrentConditionalBlockIdx = Tree.ConditionalBlocks.Add(
+		ConditionalContext(NewNodeIdx, Tree.CurrentConditionalBlockIdx, EConditionalStage::RandomStage, ConditionStr));
+	
+	return true;
+	
+}
+
+bool FSUDSScriptImporter::ParseRandomOptionLine(const FStringView& Line,
+	ParsedTree& Tree,
+	int IndentLevel,
+	int LineNo,
+	const FString& NameForErrors,
+	FSUDSMessageLogger* Logger,
+	bool bSilent)
+{
+
+	// This is kind of like an auto-generated elseif
+	
+	if (!bSilent)
+		UE_LOG(LogSUDSImporter, VeryVerbose, TEXT("%3d:%2d: OR: %s"), LineNo, IndentLevel, *FString(Line));
+	
+	// "elseif" changes the current block state 
+	// Select or choice node should already be there
+	// Select node may be turned into a choice later if choice is the first thing encountered
+
+	if (Tree.ConditionalBlocks.IsValidIndex(Tree.CurrentConditionalBlockIdx))
+	{
+		auto& Block = Tree.ConditionalBlocks[Tree.CurrentConditionalBlockIdx];
+		if (Block.Stage == EConditionalStage::RandomStage ||
+			Block.Stage == EConditionalStage::RandomOptionStage)
+		{
+			Block.Stage = EConditionalStage::RandomOptionStage;
+			const int NodeIdx = Block.SelectNodeIdx;
+				
+			auto& SelectOrChoiceNode = Tree.Nodes[NodeIdx];
+			// Generate condition based on auto-generated random item choice
+			Block.ConditionPathElement = FString::Printf(TEXT("{%hs} == %d"), SUDS_RANDOMITEM_VAR, SelectOrChoiceNode.Edges.Num());
+			const int EdgeIdx = SelectOrChoiceNode.Edges.Add(FSUDSParsedEdge(NodeIdx, -1, LineNo));
+			auto E = &SelectOrChoiceNode.Edges[EdgeIdx];
+			{
+				FString ParseError;
+				if (!E->ConditionExpression.ParseFromString(Block.ConditionPathElement, &ParseError))
+				{
+					if (!bSilent)
+						Logger->Logf(ELogVerbosity::Error, TEXT("Error in %s line %d: %s"), *NameForErrors, LineNo, *ParseError);
+				}
+			}
+			Tree.EdgeInProgressNodeIdx = NodeIdx;
+			Tree.EdgeInProgressEdgeIdx = EdgeIdx;
+		}
+		else
+		{
+			if (!bSilent)
+				Logger->Logf(ELogVerbosity::Error, TEXT("Error in %s line %d: 'or' must occur after 'random'"), *NameForErrors, LineNo);
+						
+		}
+					
+	}
+	else
+	{
+		if (!bSilent)
+			Logger->Logf(ELogVerbosity::Error, TEXT("Error in %s line %d: 'or' with no matching 'random'"), *NameForErrors, LineNo);
+	}
+	
+	return true;
+}
+
+bool FSUDSScriptImporter::ParseEndRandomLine(const FStringView& Line,
+	ParsedTree& Tree,
+	int IndentLevel,
+	int LineNo,
+	const FString& NameForErrors,
+	FSUDSMessageLogger* Logger,
+	bool bSilent)
+{
+	// Similar to "endif"; except that we need to turn the last option into an "else", otherwise at end of
+	// parsing we'll add an extra else edge
+	if (Tree.ConditionalBlocks.IsValidIndex(Tree.CurrentConditionalBlockIdx))
+	{
+		// Endrandom finishes the current block
+		const auto& Block = Tree.ConditionalBlocks[Tree.CurrentConditionalBlockIdx];
+		if (Block.Stage == EConditionalStage::RandomStage ||
+			Block.Stage == EConditionalStage::RandomOptionStage)
+		{
+			const int NodeIdx = Block.SelectNodeIdx;
+			auto& SelectNode = Tree.Nodes[NodeIdx];
+			if (SelectNode.Edges.Num() > 0)
+			{
+				auto& LastEdge = SelectNode.Edges[SelectNode.Edges.Num()-1];
+				LastEdge.ConditionExpression.Reset();
+			}
+		
+			Tree.CurrentConditionalBlockIdx = Block.PreviousBlockIdx;
+			// We must also clear the indent last node pointer, because we never want to auto-connect to conditionals
+			// We'll let the final fallthrough pass connect things
+			auto& Ctx = Tree.IndentLevelStack.Top();
+			Ctx.LastNodeIdx = -1;
+		}
+		else
+		{
+			if (!bSilent)
+				Logger->Logf(ELogVerbosity::Error, TEXT("Error in %s line %d: 'endrandom' with no matching 'random'"), *NameForErrors, LineNo);
+		}
+	}
+	else
+	{
+		if (!bSilent)
+			Logger->Logf(ELogVerbosity::Error, TEXT("Error in %s line %d: 'endrandom' with no matching 'random'"), *NameForErrors, LineNo);
+	}
+	if (!bSilent)
+		UE_LOG(LogSUDSImporter, VeryVerbose, TEXT("%3d:%2d: ENDRANDOM : %s"), LineNo, IndentLevel, *FString(Line));
+	return true;
+
+}
+
 
 bool FSUDSScriptImporter::ParseGotoLabelLine(const FStringView& Line,
                                              FSUDSScriptImporter::ParsedTree& Tree,
@@ -1038,6 +1370,7 @@ bool FSUDSScriptImporter::ParseSetLine(const FStringView& InLine,
 	// We generate anyway, because it can be overriden by later lines, but makes sure we have one always
 	FString TextID;
 	FStringView Line = InLine;
+	// TextID may be blank after this, that's OK - we fix at the end once we know what IDs are used
 	RetrieveAndRemoveTextID(Line, TextID);
 	
 	// Unfortunately FRegexMatcher doesn't support FStringView
@@ -1062,11 +1395,6 @@ bool FSUDSScriptImporter::ParseSetLine(const FStringView& InLine,
 			{
 				if (Expr.IsTextLiteral())
 				{
-					// Text must be localised
-					if (TextID.IsEmpty())
-					{
-						TextID = GenerateTextID(InLine);
-					}
 					AppendNode(Tree, FSUDSParsedNode(Name, Expr, TextID, IndentLevel, LineNo));
 				}
 				else
@@ -1085,6 +1413,78 @@ bool FSUDSScriptImporter::ParseSetLine(const FStringView& InLine,
 	return false;
 }
 
+bool FSUDSScriptImporter::ParseImportSettingLine(const FStringView& Line,
+	ParsedTree& Tree,
+	int IndentLevel,
+	int LineNo,
+	const FString& NameForErrors,
+	FSUDSMessageLogger* Logger,
+	bool bSilent)
+{
+	// Unfortunately FRegexMatcher doesn't support FStringView
+	const FString LineStr(Line);
+	const FRegexPattern ImportSetPattern(TEXT("^\\[importsetting\\s+(\\S+)\\s+(?:=\\s+)?([^\\]]+)\\]$"));
+	FRegexMatcher ImportSetRegex(ImportSetPattern, LineStr);
+	if (ImportSetRegex.FindNext())
+	{
+		if (!bSilent)
+			UE_LOG(LogSUDSImporter, VeryVerbose, TEXT("%3d:%2d: IMPORTSETTING: %s"), LineNo, IndentLevel, *FString(Line));
+
+		const FString Name = ImportSetRegex.GetCaptureGroup(1);
+		const FString ExprStr = ImportSetRegex.GetCaptureGroup(2).TrimStartAndEnd(); // trim because capture accepts spaces in quotes
+		
+		FSUDSExpression Expr;
+		{
+			FString ParseError;
+			if (Expr.ParseFromString(ExprStr, &ParseError))
+			{
+				if (Expr.IsLiteral())
+				{
+					// Import settings affect importer state directly, no nodes
+					if (Name.Compare("GenerateSpeakerLinesFromChoices", ESearchCase::IgnoreCase) == 0)
+					{
+						if (Expr.GetLiteralValue().GetType() == ESUDSValueType::Boolean)
+						{
+							bOverrideGenerateSpeakerLineForChoice = Expr.GetBooleanLiteralValue();
+						}
+						else
+						{
+							if (!bSilent)
+								Logger->Logf(ELogVerbosity::Error, TEXT("Error in %s line %d: [importsetting GenerateSpeakerLinesFromChoices ...] requires a boolean literal"), *NameForErrors, LineNo);
+						}
+					}
+					else if (Name.Compare("SpeakerIDForGeneratedLinesFromChoices", ESearchCase::IgnoreCase) == 0)
+					{
+						if (Expr.GetLiteralValue().GetType() == ESUDSValueType::Name)
+						{
+							// Speaker IDs are strings, but we go via FName to avoid translation
+							OverrideChoiceSpeakerID = Expr.GetNameLiteralValue().ToString();
+						}
+						else
+						{
+							if (!bSilent)
+								Logger->Logf(ELogVerbosity::Error, TEXT("Error in %s line %d: [importsetting SpeakerIDForGeneratedLinesFromChoices ...] requires a Name literal e.g. (`Value`)"), *NameForErrors, LineNo);
+						}
+					}
+				
+					return true;
+				}
+				else
+				{
+					if (!bSilent)
+						Logger->Logf(ELogVerbosity::Error, TEXT("Error in %s line %d: importsetting only accepts literal values"), *NameForErrors, LineNo);
+				}
+			}
+			else
+			{
+				if (!bSilent)
+					Logger->Logf(ELogVerbosity::Error, TEXT("Error in %s line %d: %s"), *NameForErrors, LineNo, *ParseError);
+			}
+		}
+	}
+	return false;
+	
+}
 
 bool FSUDSScriptImporter::ParseEventLine(const FStringView& Line,
                                          FSUDSScriptImporter::ParsedTree& Tree,
@@ -1095,7 +1495,7 @@ bool FSUDSScriptImporter::ParseEventLine(const FStringView& Line,
                                          bool bSilent)
 {
 	const FString LineStr(Line);
-	const FRegexPattern EventPattern(TEXT("^\\[event\\s+(\\w+)([^\\]]*)\\]$"));
+	const FRegexPattern EventPattern(TEXT("^\\[event\\s+([\\w\\.]+)([^\\]]*)\\]$"));
 	FRegexMatcher EventRegex(EventPattern, LineStr);
 	if (EventRegex.FindNext())
 	{
@@ -1159,7 +1559,8 @@ bool FSUDSScriptImporter::ParseTextLine(const FStringView& InLine,
 	FStringView Line = InLine;
 	// Retrieve, but don't generate text ID at this point
 	// If this is a continuation line, we shouldn't generate one, but we need to trim it off if it's there
-	bool bFoundTextID = RetrieveAndRemoveTextID(Line, TextID);
+	// TextID may be blank after this, that's OK - we fix at the end once we know what IDs are used
+	RetrieveAndRemoveTextID(Line, TextID);
 	
 	const FString LineStr(Line);
 	const FRegexPattern SpeakerPattern(TEXT("^(\\S+)\\:\\s*(.+)$"));
@@ -1174,10 +1575,6 @@ bool FSUDSScriptImporter::ParseTextLine(const FStringView& InLine,
 		// New text node
 		// Text nodes can never introduce another indent context
 		// We've already backed out to the outer indent in caller
-		if (!bFoundTextID)
-		{
-			TextID = GenerateTextID(Line);
-		}
 		Ctx.LastTextNodeIdx = AppendNode(Tree, FSUDSParsedNode(Speaker, Text, TextID, GetTextMetadataForNextEntry(IndentLevel), IndentLevel, LineNo));
 
 		ReferencedSpeakers.AddUnique(Speaker);
@@ -1208,14 +1605,6 @@ bool FSUDSScriptImporter::ParseTextLine(const FStringView& InLine,
 
 }
 
-void FSUDSScriptImporter::RetrieveAndRemoveOrGenerateTextID(FStringView& InOutLine, FString& OutTextID)
-{
-	if (!RetrieveAndRemoveTextID(InOutLine, OutTextID))
-	{
-		OutTextID = GenerateTextID(InOutLine);
-	}
-}
-
 bool FSUDSScriptImporter::RetrieveAndRemoveTextID(FStringView& InOutLine, FString& OutTextID)
 {
 
@@ -1223,7 +1612,7 @@ bool FSUDSScriptImporter::RetrieveAndRemoveTextID(FStringView& InOutLine, FStrin
 	int Number;
 	if (RetrieveTextIDFromLine(InOutLine, OutTextID, Number))
 	{
-		TextIDHighestNumber = Number;
+		TextIDHighestNumber = FMath::Max(TextIDHighestNumber, Number);
 		return true;
 	}
 
@@ -1290,7 +1679,7 @@ bool FSUDSScriptImporter::RetrieveGosubIDFromLine(FStringView& InOutLine, FStrin
 	
 }
 
-FString FSUDSScriptImporter::GenerateTextID(const FStringView& Line)
+FString FSUDSScriptImporter::GenerateTextID()
 {
 	// Generate a new text ID just based on ascending numbers
 	// We don't actually base this on the line but we have it for future possible use
@@ -1322,11 +1711,11 @@ FString FSUDSScriptImporter::GetCurrentTreeConditionalPath(const FSUDSScriptImpo
 	// Cannot fall through to blocks that aren't on the same conditional path
 	FStringBuilderBase B;
 	int BlockIdx = Tree.CurrentConditionalBlockIdx;
-	B.Append("/");
+	B.Append(TreePathSeparator);
 	// work backwards, hence prepend
 	while (BlockIdx != -1)
 	{
-		const FString& ConditionStr = Tree.ConditionalBlocks[BlockIdx].ConditionStr;
+		const FString& ConditionStr = Tree.ConditionalBlocks[BlockIdx].ConditionPathElement;
 		// Note: add the "/" even if ConditionStr is empty, because it means it's an else level
 		// Not including it can cause an if block to fall through to its own else
 		B.Prepend(FString::Printf(TEXT("%s%s"), *TreePathSeparator, *ConditionStr));
@@ -1334,6 +1723,72 @@ FString FSUDSScriptImporter::GetCurrentTreeConditionalPath(const FSUDSScriptImpo
 	}
 	return B.ToString();
 	
+}
+
+FString FSUDSScriptImporter::GetTreeConditionalPath(const FSUDSScriptImporter::ParsedTree& Tree, int NodeIndex)
+{
+	// Like GetCurrentTreeConditionalPath, but we're not in the block context. Follow the nodes back up 
+	FStringBuilderBase B;
+	B.Append(TreePathSeparator);
+
+	while (Tree.Nodes.IsValidIndex(NodeIndex))
+	{
+		const auto Node = Tree.Nodes[NodeIndex];
+		if (Tree.Nodes.IsValidIndex(Node.ParentNodeIdx))
+		{
+			const auto& Parent = Tree.Nodes[Node.ParentNodeIdx];
+			if (Parent.NodeType == ESUDSParsedNodeType::Select)
+			{
+				const int SelectNodeIdx = Node.ParentNodeIdx;
+				const int EdgeIdx = FindEdge(Tree, SelectNodeIdx, NodeIndex);
+				if (Parent.Edges.IsValidIndex(EdgeIdx))
+				{
+					const auto& Edge = Parent.Edges[EdgeIdx];
+					const bool bHasCondition = !Edge.ConditionExpression.IsEmpty();
+					FString ConditionalPathElem;
+					if (EdgeIdx == 0)
+					{
+						// First edge is always if
+						ConditionalPathElem = MakeIfConditionPathElement(SelectNodeIdx, Edge.ConditionExpression.GetSourceString());
+					}
+					else
+					{
+						if (bHasCondition)
+						{
+							// non-zero index edge with a condition is elseif
+							ConditionalPathElem = MakeElseIfConditionPathElement(SelectNodeIdx, Edge.ConditionExpression.GetSourceString());
+						}
+						else
+						{
+							ConditionalPathElem = MakeElseConditionPathElement(SelectNodeIdx);
+						}
+					}
+					// working backwards, hence prepend
+					B.Prepend(FString::Printf(TEXT("%s%s"), *TreePathSeparator, *ConditionalPathElem));
+				}
+			}
+		}
+		NodeIndex = Node.ParentNodeIdx;
+	}
+
+	return B.ToString();
+	
+}
+
+int FSUDSScriptImporter::FindEdge(const FSUDSScriptImporter::ParsedTree& Tree, int ParentNodeIdx, int TargetNodeIndex)
+{
+	if (Tree.Nodes.IsValidIndex(ParentNodeIdx))
+	{
+		const auto& Parent = Tree.Nodes[ParentNodeIdx];
+		for (int i = 0; i < Parent.Edges.Num(); ++i)
+		{
+			if (Parent.Edges[i].TargetNodeIdx == TargetNodeIndex)
+			{
+				return i;
+			}
+		}
+	}
+	return -1;
 }
 
 void FSUDSScriptImporter::SetFallthroughForNewNode(FSUDSScriptImporter::ParsedTree& Tree, FSUDSParsedNode& NewNode)
@@ -1602,6 +2057,65 @@ void FSUDSScriptImporter::ConnectRemainingNodes(FSUDSScriptImporter::ParsedTree&
 	}
 }
 
+void FSUDSScriptImporter::GenerateTextIDs(ParsedTree& Tree)
+{
+	// This is where we generate any missing TextIDs for Text nodes, Set nodes (optionally) and Choice edges
+	// We don't want to do it as we go along, because if a script has some lines with TextIDs and new inserted lines
+	// in between, we won't know from a top-down scan which IDs have already been used. Later explicit TextIDs in
+	// the script could cause an ID clash with generated ones for inserted lines
+
+	for (auto& Node : Tree.Nodes)
+	{
+		switch (Node.NodeType)
+		{
+		case ESUDSParsedNodeType::Text:
+			if (Node.TextID.IsEmpty())
+			{
+				Node.TextID = GenerateTextID();
+			}
+			break;
+		case ESUDSParsedNodeType::Choice:
+			// Text for choices is on edges
+			{
+				for (auto& Edge : Node.Edges)
+				{
+					if (!Edge.Text.IsEmpty() && Edge.TextID.IsEmpty())
+					{
+						Edge.TextID = GenerateTextID();
+					}
+
+					// If this choice generated a speaker line, we need to give that the same text ID
+					// It will always be directly after the choice edge
+					if (Tree.Nodes.IsValidIndex(Edge.TargetNodeIdx))
+					{
+						auto& NextNode = Tree.Nodes[Edge.TargetNodeIdx];
+						if (NextNode.NodeType == ESUDSParsedNodeType::Text && NextNode.TextID.IsEmpty() &&
+							NextNode.Text == Edge.Text)
+						{
+							NextNode.TextID = Edge.TextID;
+						}
+					}
+				}
+			}
+			break;
+		case ESUDSParsedNodeType::SetVariable:
+			if (Node.Expression.IsTextLiteral())
+			{
+				// Text must be localised
+				if (Node.TextID.IsEmpty())
+				{
+					Node.TextID = GenerateTextID();
+				}
+			}
+			break;
+		default:
+			break;
+		}
+
+	}
+	
+}
+
 bool FSUDSScriptImporter::PostImportSanityCheck(const FString& NameForErrors, FSUDSMessageLogger* Logger, bool bSilent)
 {
 	bool bOK = true;
@@ -1615,6 +2129,73 @@ bool FSUDSScriptImporter::PostImportSanityCheck(const FString& NameForErrors, FS
 			bOK = ChoiceNodeCheckPaths(Node, NameForErrors, Logger, bSilent) && bOK;
 		}
 	}
+	// check for unfinished conditional blocks
+	if (BodyTree.ConditionalBlocks.IsValidIndex(BodyTree.CurrentConditionalBlockIdx))
+	{
+		auto& Block = BodyTree.ConditionalBlocks[BodyTree.CurrentConditionalBlockIdx];
+		auto SelectNode = BodyTree.Nodes.IsValidIndex(Block.SelectNodeIdx) ? &BodyTree.Nodes[Block.SelectNodeIdx] : nullptr;
+		if (!bSilent && SelectNode)
+		{
+			FString BlockStartDesc;
+			FString BlockEndDesc;
+			switch (Block.Stage)
+			{
+			case EConditionalStage::IfStage:
+			case EConditionalStage::ElseIfStage:
+			case EConditionalStage::ElseStage:
+				BlockStartDesc = "if";
+				BlockEndDesc = "endif";
+				break;
+			case EConditionalStage::RandomStage:
+			case EConditionalStage::RandomOptionStage:
+				BlockStartDesc = "random";
+				BlockEndDesc = "endrandom";
+				break;
+			}
+			Logger->Logf(ELogVerbosity::Error,
+							 TEXT(
+								 "%s: '%s' block started on line %d is missing '%s'"),
+							 *NameForErrors,
+							 *BlockStartDesc,
+							 SelectNode->SourceLineNo,
+							 *BlockEndDesc);
+		}
+		
+	}
+
+	// Now check everything is referenced
+	TArray<bool> ReferencedNodes;
+	ReferencedNodes.SetNumZeroed(BodyTree.Nodes.Num());
+	// First node is always reachable
+	ReferencedNodes[0] = true;
+	for (const auto& Goto : BodyTree.GotoLabelList)
+	{
+		// Goto creates a reference
+		ReferencedNodes[Goto.Value] = true;
+	}
+	for (const auto& Node : BodyTree.Nodes)
+	{
+		for (const auto& Edge : Node.Edges)
+		{
+			if (ReferencedNodes.IsValidIndex(Edge.TargetNodeIdx))
+			{
+				ReferencedNodes[Edge.TargetNodeIdx] = true;
+			}
+		}
+	}
+
+	for (int i = 0; i < ReferencedNodes.Num(); ++i)
+	{
+		if (!ReferencedNodes[i])
+		{
+			Logger->Logf(ELogVerbosity::Warning,
+						 TEXT(
+							 "%s: Line %d is unreachable. Check your indenting particularly under choice lines."),
+						 *NameForErrors,
+						 BodyTree.Nodes[i].SourceLineNo);		
+		}
+	}
+	
 	return bOK;
 }
 
@@ -1670,7 +2251,7 @@ bool FSUDSScriptImporter::RecurseChoiceNodeCheckPaths(const FSUDSParsedNode& Cho
 			return false;
 		case ESUDSParsedNodeType::Select:
 			{
-				// Recurse selects; but in this case we can have nested choices underneath
+				// Recurse selects & randoms; but in this case we can have nested choices underneath
 				bool bOK = true;
 				for (const auto& SelEdge : TargetNode->Edges)
 				{
@@ -1697,11 +2278,16 @@ bool FSUDSScriptImporter::RecurseChoiceNodeCheckPaths(const FSUDSParsedNode& Cho
 			{
 				TargetNode = GetNode(TargetNode->Edges[0].TargetNodeIdx);
 			}
+			else
+			{
+				// This can happen if the event is the last line, but also nested in a choice
+				return true;
+			}
 			break;
 		case ESUDSParsedNodeType::Gosub:
 		case ESUDSParsedNodeType::Return:
 			// We can't really check the gosub/return statically, this will be a runtime error
-			break;
+			return true;
 		case ESUDSParsedNodeType::Goto:
 			{
 				// Follow the goto (if end, will result in null)

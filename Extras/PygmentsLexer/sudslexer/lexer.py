@@ -10,7 +10,7 @@ class SudsLexer(RegexLexer):
         'root': [
             (r'===\s*\n', Generic.Heading),
             # Choices
-            (r'\s*\*\s+[^\@\n]+[\@\n]', Generic.Subheading),
+            (r'\s*\*\-?\s+[^\@\n]+[\@\n]', Generic.Subheading),
             (r'\s*#.*\n', Comment),
             # Speaker lines
             (r'\s*\S+\:', Name.Class, 'speakerline'),
@@ -53,15 +53,15 @@ class SudsLexer(RegexLexer):
             (r'\]\s*[\n]?', Operator, '#pop'),
             # Variables      
             (r'(\{)([\w\.]+)(\})', bygroups(Operator, Name.Variable, Operator)),
-            (r'\+\/\-\*\!', Operator),
+            (r'\+\/\-\*\!\%', Operator),
             (r'\"[^\"]*\"', String.Double),
             (r'\`[^\`]*\`', String.Escape),
             (r'\d+(\.\d+)?', Number),
             (r'\b([tT]rue|[fF]alse|[mM]asculine|[fF]eminine|[nN]euter)\b', Name.Constant),
-            (r'\b(and|or|&&|\|\||not)\b', Operator),
             # Set, event commands so we can highlight variable/event differently
             (r'\s*(set|event)(\s+)([^\]\s]+)', bygroups(Keyword, Text, Name.Variable)),
-            (r'\s*(if|else|elseif|endif|event|return|goto|gosub|go to|go sub)\b', Keyword),
+            (r'\s*(if|else|elseif|endif|event|return|goto|gosub|go to|go sub|random|endrandom)\b', Keyword),
+            (r'\b(and|or|&&|\|\||not)\b', Operator),
             (r'[,]', Punctuation),
             (r'\s+', Text), # whitespace OK
 

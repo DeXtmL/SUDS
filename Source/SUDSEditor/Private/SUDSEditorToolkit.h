@@ -4,8 +4,11 @@
 
 #include "CoreMinimal.h"
 #include "SUDSValue.h"
+#include "Framework/Commands/Commands.h"
 #include "Framework/Text/BaseTextLayoutMarshaller.h"
+#include "Toolkits/AssetEditorToolkit.h"
 #include "UObject/Object.h"
+#include "Widgets/Views/STableRow.h"
 
 class SMultiLineEditableTextBox;
 struct FSUDSValue;
@@ -177,7 +180,7 @@ protected:
 	float InitialWidth = 70;
 	FName VariableName;
 	FSUDSValue VariableValue;
-	bool bIsManualOverride;
+	bool bIsManualOverride = false;
 	class FSUDSEditorToolkit* Parent = nullptr;
 
 	TSharedRef<class SWidget>  GetGenderMenu();
@@ -315,6 +318,7 @@ private:
 	void OnDialogueSetVar(USUDSDialogue* Dialogue, FName VariableName, const FSUDSValue& ToValue, const FString& ExpressionStr, int LineNo);
 	void OnDialogueUserEditedVar(USUDSDialogue* Dialogue, FName VariableName, const FSUDSValue& ToValue);
 	void OnDialogueSelectEval(USUDSDialogue* Dialogue, const FString& ExpressionStr, bool bSuccess, int LineNo);
+	void OnDialogueRandomEval(USUDSDialogue* Dialogue, const int RandomOutcome, int LineNo);
 	
 	TSharedRef<ITableRow> OnGenerateRowForOutput(
 		TSharedPtr<FSUDSEditorOutputRow> FsudsEditorDialogueRow,

@@ -4,6 +4,8 @@
 #include "SUDSScriptNodeText.h"
 #include "Internationalization/StringTable.h"
 #include "Internationalization/StringTableRegistry.h"
+#include "Misc/AutomationTest.h"
+#include "UObject/Package.h"
 
 FORCEINLINE void TestDialogueText(FAutomationTestBase* T, const FString& NameForTest, USUDSDialogue* D, const FString& SpeakerID, const FString& Text)
 {
@@ -229,6 +231,16 @@ FORCEINLINE bool TestChoiceNode(FAutomationTestBase* T, const FString& NameForTe
 	return false;
 }
 
+FORCEINLINE bool TestSelectNode(FAutomationTestBase* T, const FString& NameForTest, const USUDSScriptNode* Node, int NumEdges)
+{
+	if (T->TestNotNull(NameForTest, Node))
+	{
+		T->TestEqual(NameForTest, Node->GetNodeType(), ESUDSScriptNodeType::Select);
+		return T->TestEqual(NameForTest, Node->GetEdgeCount(), NumEdges);
+	}
+	return false;
+}
+
 FORCEINLINE bool TestChoiceEdge(FAutomationTestBase* T, const FString& NameForTest, USUDSScriptNode* Node, int EdgeIndex, const FString& Text, USUDSScriptNode** OutNode)
 {
 	*OutNode = nullptr;
@@ -237,6 +249,23 @@ FORCEINLINE bool TestChoiceEdge(FAutomationTestBase* T, const FString& NameForTe
 		if (auto Edge = Node->GetEdge(EdgeIndex))
 		{
 			T->TestEqual(NameForTest, Edge->GetText().ToString(), Text);
+			*OutNode = Edge->GetTargetNode().Get();
+			return T->TestNotNull(NameForTest, *OutNode);
+		}
+	}
+	
+	return false;
+	
+}
+
+FORCEINLINE bool TestSelectEdge(FAutomationTestBase* T, const FString& NameForTest, USUDSScriptNode* Node, int EdgeIndex, const FString& ConditionStr, USUDSScriptNode** OutNode)
+{
+	*OutNode = nullptr;
+	if (Node && Node->GetEdgeCount() > EdgeIndex)
+	{
+		if (auto Edge = Node->GetEdge(EdgeIndex))
+		{
+			T->TestEqual(NameForTest, Edge->GetCondition().GetSourceString(), ConditionStr);
 			*OutNode = Edge->GetTargetNode().Get();
 			return T->TestNotNull(NameForTest, *OutNode);
 		}

@@ -20,7 +20,7 @@ SUDS has many features, including:
 * Dialogue flow is expressed in a text file for a focussed writing experience
 * Multi-line [speech](docs/SpeakerLines.md) support
 * Player [choices](docs/ChoiceLines.md) with unlimited embedded responses
-* Flow control via [goto](docs/GotoLines.md), [gosub](docs/GosubLines.md) and [conditional branching](docs/ConditionalLines)
+* Flow control: [goto](docs/GotoLines.md), [gosub](docs/GosubLines.md), [conditional branching](docs/ConditionalLines), [random lines](docs/RandomLines.md)
 * Persistent [variable state](docs/Variables.md)
 * Send [events](docs/EventLines.md) back to code/blueprints with any number of arguments
 * Supports all the [variable substitution and formatting features](docs/TextMarkup.md) in the same way Unreal does
@@ -47,15 +47,15 @@ to do it.
 
 However, if you'd like more of the integration done for you, including supporting
 making camera cuts, playing cutscenes, and animating characters, I also publish
-[SUDS Pro on the Marketplace](https://unrealengine.com/marketplace/en-US/product/suds-pro-dialogue-system).
+[SUDS Pro on Fab](https://fab.com/s/c80e7c961216).
 It's pre-built for the engine so you don't need a C++ project, which is also
 convenient for people who just want to use Blueprints.
 
-You don't *need* [SUDS Pro](https://unrealengine.com/marketplace/en-US/product/suds-pro-dialogue-system); 
+You don't *need* [SUDS Pro](https://fab.com/s/c80e7c961216); 
 core SUDS is a perfectly capable dialogue engine on its own
 and you can integrate it with the rest of your code how you like. But, if you'd like a little extra 
 functionality pre-integrated, and also to help fund development, please consider
-buying [SUDS Pro](https://unrealengine.com/marketplace/en-US/product/suds-pro-dialogue-system).
+buying [SUDS Pro](https://fab.com/s/c80e7c961216).
 
 > ### See Also
 > * [Testing Scripts](docs/Testing.md)

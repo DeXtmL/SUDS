@@ -197,6 +197,7 @@ protected:
 	void RaiseVariableChange(const FName& VarName, const FSUDSValue& Value, bool bFromScript, int LineNo);
 	void RaiseVariableRequested(const FName& VarName, int LineNo);
 	void RaiseExpressionVariablesRequested(const FSUDSExpression& Expression, int LineNo);
+	const TMap<FName, FSUDSValue>& GetGlobalVariables() const;
 
 	USUDSScriptNode* GetNextNode(USUDSScriptNode* Node);
 	bool IsChoiceOrTextNode(ESUDSScriptNodeType Type);
@@ -210,6 +211,7 @@ protected:
 	void RecurseAppendChoices(const USUDSScriptNode* Node, TArray<FSUDSScriptEdge>& OutChoices);
 	USoundBase* GetSoundForCurrentLine(bool bAllowAnyTarget) const;
 	UDialogueVoice* GetTargetVoice() const;
+	class USoundConcurrency* GetVoiceSoundConcurrency() const;
 
 	FText ResolveParameterisedText(const TArray<FName> Params, const FTextFormat& TextFormat, int LineNo);
 	void GetTextFormatArgs(const TArray<FName>& ArgNames, FFormatNamedArguments& OutArgs) const;
@@ -394,6 +396,14 @@ public:
 	                              USoundAttenuation* AttenuationSettings = nullptr,
 	                              bool bLooselyMatchTarget = true);
 
+	/** If the current line is voiced, spawn a sound for it in 2D. Use this if you want to control the sound while it's playing.
+	 * @param VolumeMultiplier A linear scalar multiplied with the volume, in order to make the sound louder or softer.
+	 * @param PitchMultiplier A linear scalar multiplied with the pitch.
+	 * @param bLooselyMatchTarget When finding the sound, don't require the target DialogueVoice to match precisely (recommended)
+	 */
+	UFUNCTION(BlueprintCallable, Category="SUDS|Dialogue", meta=(AdvancedDisplay = "2", UnsafeDuringActorConstruction = "true", Keywords = "play"))
+	UAudioComponent* SpawnVoicedLine2D(float VolumeMultiplier = 1.f, float PitchMultiplier = 1.f, bool bLooselyMatchTarget = true);
+
 	/** If the current line is voiced, spawn a sound for it at the given location. Unlike PlayVoicedLineAtLocation you can
 	 * attach this sound to a moving object if you want
 	 * @param Location World position to play dialogue at
@@ -411,6 +421,12 @@ public:
 								  USoundAttenuation* AttenuationSettings = nullptr,
 								  bool bLooselyMatchTarget = true);
 
+	/** If the current line is voiced, get the sound which would be played for it. 
+	 * @param bLooselyMatchTarget When finding the sound, don't require the target DialogueVoice to match precisely (recommended)
+	 */
+	UFUNCTION(BlueprintCallable, Category="SUDS|Dialogue", meta=(AdvancedDisplay = "4", UnsafeDuringActorConstruction = "true", Keywords = "play"))
+	USoundBase* GetVoicedLineSound(bool bLooselyMatchTarget = true);
+	
 	/**
 	 * Get the number of choices available from this node.
 	 * Note, this will return 1 in the case of just linear text progression. The difference between just linked text
@@ -476,6 +492,13 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category="SUDS|Dialogue")
 	bool IsEnded() const;
 
+	/// Returns whether the current speaker line is the last line of dialogue, i.e. there are no
+	/// further choices and the next continue will end the dialogue. This allows you to anticipate
+	/// the end of dialogue (IsEnded() will still return false until the last continue is taken)
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category="SUDS|Dialogue")
+	bool IsFinalLine() const;
+	
+
 	/// End the dialogue early
 	UFUNCTION(BlueprintCallable, Category="SUDS|Dialogue")
 	void End(bool bQuietly);
@@ -540,7 +563,7 @@ public:
 
 	/// Set a variable in dialogue state
 	/// This is mostly only useful if you happen to already have a general purpose FSUDSValue.
-	/// See SetDialogueText, SetDialogueInt etc for literal-friendly versions
+	/// See SetVariableText, SetVariableInt etc for literal-friendly versions
 	UFUNCTION(BlueprintCallable, Category="SUDS|Dialogue")
 	void SetVariable(FName Name, FSUDSValue Value)
 	{

@@ -11,6 +11,9 @@
 #include "SUDSScriptNodeText.h"
 #include "EditorFramework/AssetImportData.h"
 #include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
+#include "Misc/Paths.h"
+#include "UObject/Package.h"
 
 void FSUDSEditorScriptTools::WriteBackTextIDs(USUDSScript* Script, FSUDSMessageLogger& Logger)
 {
@@ -170,7 +173,7 @@ bool FSUDSEditorScriptTools::WriteBackTextID(const FText& AssetText, int LineNo,
 	}
 
 	const FString& SourceLine = Lines[Idx];
-	const FString TextID = FTextInspector::GetTextId(AssetText).GetKey().GetChars();
+	const FString TextID = SUDS_GET_TEXT_KEY(AssetText);
 	FString ExistingTextID;
 	int ExistingNum;
 	FStringView SourceLineView(SourceLine);

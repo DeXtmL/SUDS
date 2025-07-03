@@ -5,9 +5,10 @@
 #include "SUDSScriptImporter.h"
 #include "TestParticipant.h"
 #include "TestUtils.h"
+#include "Internationalization/Internationalization.h"
 #include "Misc/AutomationTest.h"
 
-PRAGMA_DISABLE_OPTIMIZATION
+UE_DISABLE_OPTIMIZATION
 
 const FString ParamsInput = R"RAWSUD(
 Player: Hello, I'm {SpeakerName.Player}
@@ -32,6 +33,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTestParameters,
 
 bool FTestParameters::RunTest(const FString& Parameters)
 {
+	// Number and plural formatting are locale-specific, so we must set it to a predefined value to produce the expected output
+	FInternationalization::FCultureStateSnapshot CultureStateSnapshot;
+	FInternationalization::Get().BackupCultureState(CultureStateSnapshot);
+	FInternationalization::Get().SetCurrentCulture(TEXT("en-US"));
+	ON_SCOPE_EXIT
+	{
+		FInternationalization::Get().RestoreCultureState(CultureStateSnapshot);
+	};
+
 	FSUDSMessageLogger Logger(false);
 	FSUDSScriptImporter Importer;
 	TestTrue("Import should succeed", Importer.ImportFromBuffer(GetData(ParamsInput), ParamsInput.Len(), "ParamsInput", &Logger, true));
@@ -81,6 +91,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTestParametersPriority,
 
 bool FTestParametersPriority::RunTest(const FString& Parameters)
 {
+	// Number and plural formatting are locale-specific, so we must set it to a predefined value to produce the expected output
+	FInternationalization::FCultureStateSnapshot CultureStateSnapshot;
+	FInternationalization::Get().BackupCultureState(CultureStateSnapshot);
+	FInternationalization::Get().SetCurrentCulture(TEXT("en-US"));
+	ON_SCOPE_EXIT
+	{
+		FInternationalization::Get().RestoreCultureState(CultureStateSnapshot);
+	};
 
 	FSUDSMessageLogger Logger(false);
 	FSUDSScriptImporter Importer;
@@ -126,4 +144,4 @@ bool FTestParametersPriority::RunTest(const FString& Parameters)
 	return true;	
 }
 
-UE_ENABLE_OPTIMIZATION_SHIP
+UE_ENABLE_OPTIMIZATION

@@ -59,7 +59,7 @@ enum class ESUDSParsedNodeType : uint8
 	Text,
 	/// Choice node, displaying a series of user choices which navigate to other nodes
 	Choice,
-	/// Select node, automatically selecting one which navigates to another node based on state
+	/// Select node, automatically selecting one which navigates to another node based on state (also Random)
 	Select,
 	/// Goto node, redirects execution somewhere else
 	/// Gotos are only nodes in the parsing structure, because they need to be discoverable as a fallthrough destination
@@ -183,7 +183,9 @@ protected:
 	{
 		IfStage,
 		ElseIfStage,
-		ElseStage
+		ElseStage,
+		RandomStage,
+		RandomOptionStage
 	};
 	enum class EConditionalParent : uint8
 	{
@@ -201,14 +203,14 @@ protected:
 		int PreviousBlockIdx = -1;
 		/// Track whether we're in if/elseif/else
 		EConditionalStage Stage;
-		/// String of current condition 
-		FString ConditionStr;
+		/// String identifying the current condition; for elseif or else contains original "if" context 
+		FString ConditionPathElement;
 
 		ConditionalContext(int InSelectNodeIdx, int InPrevBlockIdx, EConditionalStage InStage, const FString& InCondStr) :
 			SelectNodeIdx(InSelectNodeIdx),
 			PreviousBlockIdx(InPrevBlockIdx),
 			Stage(InStage),
-			ConditionStr(InCondStr)
+			ConditionPathElement(InCondStr)
 		{
 		}
 
@@ -315,6 +317,8 @@ protected:
 	bool bHeaderDone = false;
 	bool bTooLateForHeader = false;
 	bool bHeaderInProgress = false;
+	TOptional<bool> bOverrideGenerateSpeakerLineForChoice;
+	TOptional<FString> OverrideChoiceSpeakerID;
 	bool bTextInProgress = false;
 	int ChoiceUniqueId = 0;
 	/// For generating text IDs
@@ -366,6 +370,35 @@ protected:
 	                    FSUDSMessageLogger*
 	                    Logger,
 	                    bool bSilent);
+	static bool IsRandomLine(const FStringView& Line);
+	bool ParseRandomLine(const FStringView& Line,
+	                     ParsedTree& Tree,
+	                     int IndentLevel,
+	                     int LineNo,
+	                     const FString& NameForErrors,
+	                     FSUDSMessageLogger* Logger,
+	                     bool bSilent);
+	bool ParseBeginRandomLine(const FStringView& Line,
+						 ParsedTree& Tree,
+						 int IndentLevel,
+						 int LineNo,
+						 const FString& NameForErrors,
+						 FSUDSMessageLogger* Logger,
+						 bool bSilent);
+	bool ParseRandomOptionLine(const FStringView& Line,
+						 ParsedTree& Tree,
+						 int IndentLevel,
+						 int LineNo,
+						 const FString& NameForErrors,
+						 FSUDSMessageLogger* Logger,
+						 bool bSilent);
+	bool ParseEndRandomLine(const FStringView& Line,
+						 ParsedTree& Tree,
+						 int IndentLevel,
+						 int LineNo,
+						 const FString& NameForErrors,
+						 FSUDSMessageLogger* Logger,
+						 bool bSilent);
 	bool ParseGotoLabelLine(const FStringView& Line,
 	                        ParsedTree& Tree,
 	                        int IndentLevel,
@@ -415,16 +448,30 @@ protected:
 	                   const FString& NameForErrors,
 	                   FSUDSMessageLogger* Logger,
 	                   bool bSilent);
+	bool ParseImportSettingLine(const FStringView& Line,
+	                            ParsedTree& Tree,
+	                            int IndentLevel,
+	                            int LineNo,
+	                            const FString& NameForErrors,
+	                            FSUDSMessageLogger* Logger,
+	                            bool bSilent);
 	TMap<FName, FString> GetTextMetadataForNextEntry(int CurrentLineIndent);
 	bool IsCommentLine(const FStringView& TrimmedLine);
 	FStringView TrimLine(const FStringView& Line, int& OutIndentLevel) const;
-	int FindChoiceAfterTextNode(const FSUDSScriptImporter::ParsedTree& Tree, int TextNodeIdx);
+	int FindChoiceAfterTextNode(const FSUDSScriptImporter::ParsedTree& Tree, int TextNodeIdx, const FString& ConditionalPath);
+	int RecurseChoiceNodeFindDeepest(const ParsedTree& Tree, int FromChoiceIdx, const FString& ConditionalPath);
+	int RecurseSelectNodeFindDeepestChoice(const ParsedTree& Tree, int FromSelectNode, const FString& ConditionalPath);
+	int FindEdge(const FSUDSScriptImporter::ParsedTree& Tree, int ParentNodeIdx, int TargetNodeIndex);
+	FString MakeIfConditionPathElement(int SelectNodeIdx, const FString& ConditionStr);
+	FString MakeElseIfConditionPathElement(int SelectNodeIdx, const FString& ConditionStr);
+	FString MakeElseConditionPathElement(int SelectNodeIdx);
 	int FindLastChoiceNode(const ParsedTree& Tree, int IndentLevel);
 	int FindLastChoiceNode(const ParsedTree& Tree, int IndentLevel, int FromIndex, const FString& ConditionPath);
 	void PopIndent(ParsedTree& Tree);
 	void PushIndent(ParsedTree& Tree, int NodeIdx, int Indent, const FString& Path);
 	FString GetCurrentTreePath(const FSUDSScriptImporter::ParsedTree& Tree);
 	FString GetCurrentTreeConditionalPath(const FSUDSScriptImporter::ParsedTree& Tree);
+	FString GetTreeConditionalPath(const ParsedTree& Tree, int NodeIndex);
 	void SetFallthroughForNewNode(FSUDSScriptImporter::ParsedTree& Tree, FSUDSParsedNode& NewNode);
 	int AppendNode(ParsedTree& Tree, const FSUDSParsedNode& InNode);
 	bool SelectNodeIsMissingElsePath(const FSUDSScriptImporter::ParsedTree& Tree, const FSUDSParsedNode& Node);
@@ -438,11 +485,11 @@ protected:
 	                                 Logger,
 	                                 bool bSilent);
 	void ConnectRemainingNodes(ParsedTree& Tree, const FString& NameForErrors, FSUDSMessageLogger* Logger, bool bSilent);
+	void GenerateTextIDs(ParsedTree& BodyTree);
 	int FindFallthroughNodeIndex(ParsedTree& Tree, int StartNodeIndex, const FString& FromChoicePath, const FString& FromConditionalPath);
-	void RetrieveAndRemoveOrGenerateTextID(FStringView& InOutLine, FString& OutTextID);
 	bool RetrieveAndRemoveTextID(FStringView& InOutLine, FString& OutTextID);
 	bool RetrieveAndRemoveGosubID(FStringView& InOutLine, FString& OutTextID);
-	FString GenerateTextID(const FStringView& Line);
+	FString GenerateTextID();
 	const FSUDSParsedNode* GetNode(const ParsedTree& Tree, int Index = 0);
 	int GetGotoTargetNodeIndex(const ParsedTree& Tree, const FString& InLabel);
 	void PopulateAssetFromTree(USUDSScript* Asset,

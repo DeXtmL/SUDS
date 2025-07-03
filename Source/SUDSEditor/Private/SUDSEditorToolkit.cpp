@@ -12,15 +12,27 @@
 #include "SUDSMessageLogger.h"
 #include "SUDSScript.h"
 #include "SUDSScriptNodeText.h"
+#include "SUDSSubsystem.h"
 #include "Framework/Text/SlateTextRun.h"
+#include "Misc/MessageDialog.h"
+#include "Widgets/Docking/SDockTab.h"
+#include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SComboButton.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "Widgets/Input/SNumericEntryBox.h"
+#include "Widgets/SToolTip.h"
+#include "Widgets/Views/SListView.h"
+#include "Toolkits/AssetEditorToolkit.h"
+#include "PropertyEditorModule.h"
 
 const FName NAME_SpeakerLine("SpeakerLine");
 const FName NAME_Choice("Choice");
 const FName NAME_VariableSet("VariableSet");
 const FName NAME_VariableEdit("VariableEdit");
 const FName NAME_SelectEval("Condition");
+const FName NAME_RandomEval("Random");
 const FName NAME_Event("Event");
 const FName NAME_Start("Start");
 const FName NAME_Finish("Finish");
@@ -119,7 +131,9 @@ void FSUDSEditorToolkit::RegisterTabSpawners(const TSharedRef<FTabManager>& InTa
 	InTabManager->RegisterTabSpawner("SUDSDialogueTab", FOnSpawnTab::CreateLambda([this](const FSpawnTabArgs&)
 	{
 		OutputListView = SNew(SListView<TSharedPtr<FSUDSEditorOutputRow>>)
+#if ENGINE_MINOR_VERSION < 5
 				.ItemHeight(24)
+#endif
 				.SelectionMode(ESelectionMode::None)
 				.ListItemsSource(&OutputRows)
 				.OnGenerateRow(this, &FSUDSEditorToolkit::OnGenerateRowForOutput)
@@ -155,7 +169,9 @@ void FSUDSEditorToolkit::RegisterTabSpawners(const TSharedRef<FTabManager>& InTa
 		ChoicesBox = SNew(SVerticalBox);
 
 		VariablesListView = SNew(SListView<TSharedPtr<FSUDSEditorVariableRow>>)
+#if ENGINE_MINOR_VERSION < 5
 				.ItemHeight(28)
+#endif
 				.SelectionMode(ESelectionMode::None)
 				.ListItemsSource(&VariableRows)
 				.OnGenerateRow(this, &FSUDSEditorToolkit::OnGenerateRowForVariable)
@@ -190,6 +206,8 @@ void FSUDSEditorToolkit::RegisterTabSpawners(const TSharedRef<FTabManager>& InTa
 
 				);
 
+		// To ensure globals are pre-populated
+		UpdateVariables();
 		
 		return SNew(SDockTab)
 		[
@@ -471,25 +489,44 @@ FString FSUDSEditorToolkit::GetWorldCentricTabPrefix() const
 
 void FSUDSEditorToolkit::UserEditVariable(const FName& Name, FSUDSValue Value)
 {
-
-	// Update manual overrides if it's one of these
-	if (ManualOverrideVariables.Contains(Name))
+	FName GlobalName;
+	if (USUDSLibrary::IsDialogueVariableGlobal(Name, GlobalName))
 	{
-		ManualOverrideVariables[Name] = Value;
+		USUDSSubsystem::Test_DummyGlobalVariables.Add(GlobalName, Value);
+		OnDialogueUserEditedVar(nullptr, Name, Value);
 	}
-
-	// This will cause a refresh
-	if (Dialogue)
-		Dialogue->SetVariable(Name, Value);
 	else
-		UpdateVariables();
+	{
+		// Update manual overrides if it's one of these
+		if (ManualOverrideVariables.Contains(Name))
+		{
+			ManualOverrideVariables[Name] = Value;
+		}
+
+		// This will cause a refresh
+		if (Dialogue)
+			Dialogue->SetVariable(Name, Value);
+		else
+		{
+			// This won't get called if dialogue is not initialised, so call it to get log & refresh
+			OnDialogueUserEditedVar(nullptr, Name, Value);
+		}
+	}
 }
 
 void FSUDSEditorToolkit::DeleteVariable(const FName& Name)
 {
-	ManualOverrideVariables.Remove(Name);
-	if (Dialogue)
-		Dialogue->UnSetVariable(Name);
+	FName GlobalName;
+	if (USUDSLibrary::IsDialogueVariableGlobal(Name, GlobalName))
+	{
+		USUDSSubsystem::Test_DummyGlobalVariables.Remove(GlobalName);
+	}
+	else
+	{
+		ManualOverrideVariables.Remove(Name);
+		if (Dialogue)
+			Dialogue->UnSetVariable(Name);
+	}
 	
 	UpdateVariables();
 }
@@ -926,17 +963,27 @@ FReply FSUDSEditorToolkit::AddVariableClicked()
 	{
 		FName VarName(VarNameText.ToString().TrimStartAndEnd());
 		const FSUDSValue Val(ValType);
-		ManualOverrideVariables.Add(VarName, Val);
-		if (Dialogue)
+		FName GlobalVarName;
+		if (USUDSLibrary::IsDialogueVariableGlobal(VarName, GlobalVarName))
 		{
-			// This will cause a refresh
-			Dialogue->SetVariable(VarName, Val);
+			USUDSSubsystem::Test_DummyGlobalVariables.Add(GlobalVarName, Val);
+			OnDialogueUserEditedVar(nullptr, VarName, Val);
 		}
 		else
 		{
-			// This won't get called if dialogue is not initialised, so call it to get log & refresh
-			OnDialogueUserEditedVar(nullptr, VarName, Val);
+			ManualOverrideVariables.Add(VarName, Val);
+			if (Dialogue)
+			{
+				// This will cause a refresh
+				Dialogue->SetVariable(VarName, Val);
+			}
+			else
+			{
+				// This won't get called if dialogue is not initialised, so call it to get log & refresh
+				OnDialogueUserEditedVar(nullptr, VarName, Val);
+			}
 		}
+		
 	}
 	return FReply::Handled();
 	
@@ -965,6 +1012,17 @@ void FSUDSEditorToolkit::UpdateVariables()
 			VariableRows.Add(MakeShareable(new FSUDSEditorVariableRow(Pair.Key, Pair.Value, true)));
 		}
 	}
+	// Also do global vars
+	for (auto& Pair : USUDSSubsystem::Test_DummyGlobalVariables)
+	{
+		VariableRows.Add(MakeShareable(
+			new FSUDSEditorVariableRow(
+				// We need to insert the "global." prefix back in since it's removed in the global var list
+				FName(FString::Printf(TEXT("global.%s"), *Pair.Key.ToString())),
+				Pair.Value,
+				true)));
+	}
+	
 	VariableRows.Sort();
 	
 	VariablesListView->RequestListRefresh();
@@ -1037,6 +1095,17 @@ void FSUDSEditorToolkit::OnDialogueSelectEval(USUDSDialogue* D,
 	                INVTEXT("Conditional"));
 }
 
+void FSUDSEditorToolkit::OnDialogueRandomEval(USUDSDialogue* D,
+                                              const int RandomOutcome,
+                                              int LineNo)
+{
+	AddDialogueStep(NAME_RandomEval,
+					LineNo,
+					FText::Format(INVTEXT(": {0}"),
+								  RandomOutcome),
+					INVTEXT("Random"));
+}
+
 TSharedRef<ITableRow> FSUDSEditorToolkit::OnGenerateRowForOutput(
 	TSharedPtr<FSUDSEditorOutputRow> Row,
 	const TSharedRef<STableViewBase>& OwnerTable)
@@ -1071,6 +1140,7 @@ void FSUDSEditorToolkit::WriteBackTextIDs()
 		                         "Are you sure you want to write string keys back to this script?"))
 		== EAppReturnType::Yes)
 	{
+		FSUDSMessageLogger::ClearMessages();
 		FSUDSMessageLogger Logger;
 		FSUDSEditorScriptTools::WriteBackTextIDs(Script, Logger);
 	}
@@ -1085,6 +1155,7 @@ void FSUDSEditorToolkit::GenerateVOAssets()
 		== EAppReturnType::Yes)
 	{
 		EObjectFlags Flags = RF_Public | RF_Standalone | RF_Transactional;
+		FSUDSMessageLogger::ClearMessages();
 		FSUDSMessageLogger Logger;
 		FSUDSEditorVoiceOverTools::GenerateAssets(Script, Flags, &Logger);
 	}
@@ -1357,7 +1428,7 @@ void FSUDSTraceLogMarshaller::SetText(const FString& SourceString, FTextLayout& 
 	const FTextBlockStyle& OrigStyle = FEditorStyle::Get().GetWidgetStyle<FTextBlockStyle>(LogNormalStyle);
 #endif
 
-	for (const auto Msg : Messages)
+	for (const auto& Msg : Messages)
 	{
 		// Get base style & copy
 		FTextBlockStyle Style = OrigStyle;
